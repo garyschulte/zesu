@@ -55,15 +55,12 @@ pub fn opBalance(ctx: *InstructionContext) void {
     const addr_val = stack.peekUnsafe(0);
     const addr = host_module.u256ToAddress(addr_val);
 
-    // Post-Berlin: charge dynamic warm/cold cost BEFORE loading the account.
-    // This prevents loading the account from the database when the opcode runs OOG,
-    // which would incorrectly add the address to the EIP-7928 block access list.
-    if (primitives.isEnabledIn(ctx.interpreter.runtime_flags.spec_id, .berlin)) {
-        const dyn_gas: u64 = if (h.isAddressCold(addr)) gas_costs.COLD_ACCOUNT_ACCESS else gas_costs.WARM_ACCOUNT_ACCESS;
-        if (!ctx.interpreter.gas.spend(dyn_gas)) {
-            ctx.interpreter.halt(.out_of_gas);
-            return;
-        }
+    // EIP-2929 (Berlin+): dynamic warm/cold cost charged BEFORE loading the account.
+    // Always active post-Osaka.
+    const dyn_gas: u64 = if (h.isAddressCold(addr)) gas_costs.COLD_ACCOUNT_ACCESS else gas_costs.WARM_ACCOUNT_ACCESS;
+    if (!ctx.interpreter.gas.spend(dyn_gas)) {
+        ctx.interpreter.halt(.out_of_gas);
+        return;
     }
 
     const info = h.accountInfo(addr) orelse {
@@ -112,13 +109,12 @@ pub fn opExtcodesize(ctx: *InstructionContext) void {
     const addr_val = stack.peekUnsafe(0);
     const addr = host_module.u256ToAddress(addr_val);
 
-    // Post-Berlin: charge dynamic warm/cold cost BEFORE loading the code.
-    if (primitives.isEnabledIn(ctx.interpreter.runtime_flags.spec_id, .berlin)) {
-        const dyn_gas: u64 = if (h.isAddressCold(addr)) gas_costs.COLD_ACCOUNT_ACCESS else gas_costs.WARM_ACCOUNT_ACCESS;
-        if (!ctx.interpreter.gas.spend(dyn_gas)) {
-            ctx.interpreter.halt(.out_of_gas);
-            return;
-        }
+    // EIP-2929 (Berlin+): dynamic warm/cold cost charged BEFORE loading the code.
+    // Always active post-Osaka.
+    const dyn_gas: u64 = if (h.isAddressCold(addr)) gas_costs.COLD_ACCOUNT_ACCESS else gas_costs.WARM_ACCOUNT_ACCESS;
+    if (!ctx.interpreter.gas.spend(dyn_gas)) {
+        ctx.interpreter.halt(.out_of_gas);
+        return;
     }
 
     const info = h.codeInfo(addr) orelse {
@@ -156,13 +152,11 @@ pub fn opExtcodecopy(ctx: *InstructionContext) void {
     // Charge all gas (warm/cold + copy + memory expansion) BEFORE loading the code.
     // This eliminates phantom BAL entries: the account is only loaded if gas succeeds.
 
-    // Post-Berlin: charge dynamic warm/cold cost.
-    if (primitives.isEnabledIn(ctx.interpreter.runtime_flags.spec_id, .berlin)) {
-        const dyn_gas: u64 = if (h.isAddressCold(addr)) gas_costs.COLD_ACCOUNT_ACCESS else gas_costs.WARM_ACCOUNT_ACCESS;
-        if (!ctx.interpreter.gas.spend(dyn_gas)) {
-            ctx.interpreter.halt(.out_of_gas);
-            return;
-        }
+    // EIP-2929 (Berlin+): dynamic warm/cold cost. Always active post-Osaka.
+    const dyn_gas: u64 = if (h.isAddressCold(addr)) gas_costs.COLD_ACCOUNT_ACCESS else gas_costs.WARM_ACCOUNT_ACCESS;
+    if (!ctx.interpreter.gas.spend(dyn_gas)) {
+        ctx.interpreter.halt(.out_of_gas);
+        return;
     }
 
     // Charge copy cost and expand memory (gas inputs depend only on stack values, not code content).
@@ -239,13 +233,12 @@ pub fn opExtcodehash(ctx: *InstructionContext) void {
     const addr_val = stack.peekUnsafe(0);
     const addr = host_module.u256ToAddress(addr_val);
 
-    // Post-Berlin: charge dynamic warm/cold cost BEFORE loading the code hash.
-    if (primitives.isEnabledIn(ctx.interpreter.runtime_flags.spec_id, .berlin)) {
-        const dyn_gas: u64 = if (h.isAddressCold(addr)) gas_costs.COLD_ACCOUNT_ACCESS else gas_costs.WARM_ACCOUNT_ACCESS;
-        if (!ctx.interpreter.gas.spend(dyn_gas)) {
-            ctx.interpreter.halt(.out_of_gas);
-            return;
-        }
+    // EIP-2929 (Berlin+): dynamic warm/cold cost BEFORE loading the code hash.
+    // Always active post-Osaka.
+    const dyn_gas: u64 = if (h.isAddressCold(addr)) gas_costs.COLD_ACCOUNT_ACCESS else gas_costs.WARM_ACCOUNT_ACCESS;
+    if (!ctx.interpreter.gas.spend(dyn_gas)) {
+        ctx.interpreter.halt(.out_of_gas);
+        return;
     }
 
     const info = h.extCodeHash(addr) orelse {
@@ -304,16 +297,13 @@ pub fn opSload(ctx: *InstructionContext) void {
 
     const key = stack.peekUnsafe(0);
     const self_addr = ctx.interpreter.input.target;
-    const spec = ctx.interpreter.runtime_flags.spec_id;
 
-    // Dynamic gas for Berlin+ (static_gas is 0 for Berlin+).
+    // EIP-2929 (Berlin+): dynamic cold/warm gas, always active post-Osaka.
     // Charge BEFORE loading to avoid a DB read on OOG (EIP-7928 BAL correctness).
-    if (primitives.isEnabledIn(spec, .berlin)) {
-        const dyn_gas: u64 = if (h.isStorageCold(self_addr, key)) gas_costs.COLD_SLOAD else gas_costs.WARM_SLOAD;
-        if (!ctx.interpreter.gas.spend(dyn_gas)) {
-            ctx.interpreter.halt(.out_of_gas);
-            return;
-        }
+    const dyn_gas: u64 = if (h.isStorageCold(self_addr, key)) gas_costs.COLD_SLOAD else gas_costs.WARM_SLOAD;
+    if (!ctx.interpreter.gas.spend(dyn_gas)) {
+        ctx.interpreter.halt(.out_of_gas);
+        return;
     }
 
     const result = h.sload(self_addr, key) orelse {
@@ -326,14 +316,13 @@ pub fn opSload(ctx: *InstructionContext) void {
 
 /// SSTORE (0x55): Save a word to storage.
 /// Stack: [key, value] -> []
-/// Gas: complex EIP-2200/EIP-2929 calculation
-pub fn opSstore(ctx: *InstructionContext) void {
+/// Gas: EIP-2200/EIP-2929/EIP-8037 rules
+fn opSstoreImpl(comptime spec: primitives.Spec, ctx: *InstructionContext) void {
     const h = ctx.host orelse {
         ctx.interpreter.halt(.invalid_opcode);
         return;
     };
 
-    // Static call check
     if (ctx.interpreter.runtime_flags.is_static) {
         ctx.interpreter.halt(.invalid_static);
         return;
@@ -350,15 +339,12 @@ pub fn opSstore(ctx: *InstructionContext) void {
     stack.shrinkUnsafe(2);
 
     const self_addr = ctx.interpreter.input.target;
-    const spec = ctx.interpreter.runtime_flags.spec_id;
 
-    // EIP-2200 (Istanbul+): SSTORE must not execute when gas_remaining <= CALL_STIPEND.
-    // This prevents a callee that received only the 2300-gas stipend from mutating storage.
-    if (primitives.isEnabledIn(spec, .istanbul)) {
-        if (ctx.interpreter.gas.remaining <= gas_costs.CALL_STIPEND) {
-            ctx.interpreter.halt(.out_of_gas);
-            return;
-        }
+    // EIP-2200 (Istanbul+): must not execute when gas_remaining <= CALL_STIPEND.
+    // Always active post-Osaka.
+    if (ctx.interpreter.gas.remaining <= gas_costs.CALL_STIPEND) {
+        ctx.interpreter.halt(.out_of_gas);
+        return;
     }
 
     const result = h.sstore(self_addr, key, new_value) orelse {
@@ -366,17 +352,14 @@ pub fn opSstore(ctx: *InstructionContext) void {
         return;
     };
 
-    // Compute gas cost using EIP-2200/EIP-2929/EIP-8037 rules
     const block_gas_limit = h.block.gas_limit;
-    const sstore_gas = gas_costs.getSstoreCost(spec, result.original, result.current, result.new, result.is_cold, block_gas_limit);
+    const sstore_gas = gas_costs.getSstoreCost(spec.amsterdam, result.original, result.current, result.new, result.is_cold, block_gas_limit);
 
     if (!ctx.interpreter.gas.spend(sstore_gas.gas_cost)) {
         ctx.interpreter.halt(.out_of_gas);
         return;
     }
 
-    // EIP-8037 (Amsterdam+): charge state gas for new storage slot creation.
-    // Draws from reservoir first, spills to gas_left if needed.
     if (sstore_gas.state_gas > 0) {
         if (!ctx.interpreter.gas.spendStateGas(sstore_gas.state_gas)) {
             ctx.interpreter.halt(.out_of_gas);
@@ -384,18 +367,27 @@ pub fn opSstore(ctx: *InstructionContext) void {
         }
     }
 
-    // EIP-8037 (Amsterdam+): state gas refund returns to reservoir (not regular refund counter).
     if (sstore_gas.state_gas_refund > 0) {
         ctx.interpreter.gas.refundStateGas(sstore_gas.state_gas_refund);
     }
 
-    // Apply gas refund (can be positive or negative)
     if (sstore_gas.gas_refund > 0) {
         ctx.interpreter.gas.recordRefund(@intCast(sstore_gas.gas_refund));
     } else if (sstore_gas.gas_refund < 0) {
         const abs_refund: u64 = @intCast(-sstore_gas.gas_refund);
         ctx.interpreter.gas.refunded -= @as(i64, @intCast(abs_refund));
     }
+}
+
+/// Public InstructionFn-compatible entry for SSTORE (Osaka spec).
+/// For Amsterdam behavior, use the table entry produced by protocol_schedule.
+pub fn opSstore(ctx: *InstructionContext) void {
+    opSstoreImpl(primitives.OSAKA, ctx);
+}
+
+/// Spec-parameterized SSTORE for use with protocol_schedule.specialize().
+pub fn opSstoreSpec(comptime spec: primitives.Spec, ctx: *InstructionContext) void {
+    opSstoreImpl(spec, ctx);
 }
 
 /// TLOAD (0x5C): Load a word from transient storage (EIP-1153, Cancun+).
@@ -572,14 +564,13 @@ pub const opLog4 = makeLogFn(4);
 
 /// SELFDESTRUCT (0xFF): Destroy current contract, send ETH to target.
 /// Stack: [target] -> []
-/// Gas: G_SELFDESTRUCT (5000, static) + dynamic warm/cold + had_value+new_account
-pub fn opSelfdestruct(ctx: *InstructionContext) void {
+/// Gas: G_SELFDESTRUCT (5000, static) + dynamic warm/cold + new_account state gas
+fn opSelfdestructImpl(comptime spec: primitives.Spec, ctx: *InstructionContext) void {
     const h = ctx.host orelse {
         ctx.interpreter.halt(.invalid_opcode);
         return;
     };
 
-    // Static call check
     if (ctx.interpreter.runtime_flags.is_static) {
         ctx.interpreter.halt(.invalid_static);
         return;
@@ -594,13 +585,10 @@ pub fn opSelfdestruct(ctx: *InstructionContext) void {
     const target_val = stack.popUnsafe();
     const target = host_module.u256ToAddress(target_val);
     const self_addr = ctx.interpreter.input.target;
-    const spec = ctx.interpreter.runtime_flags.spec_id;
 
-    // Pre-check: only guard against the cold-access cost before loading the target.
-    // G_NEWACCOUNT depends on target_exists (only known after loading), so we check it
-    // inline after calling selfdestruct() with an explicit OOG return.
+    // EIP-2929 (Berlin+, always active): pre-check cold guard before loading target.
     const pre_is_cold = h.isAddressCold(target);
-    const cold_guard: u64 = if (primitives.isEnabledIn(spec, .berlin) and pre_is_cold) gas_costs.COLD_ACCOUNT_ACCESS else 0;
+    const cold_guard: u64 = if (pre_is_cold) gas_costs.COLD_ACCOUNT_ACCESS else 0;
     if (ctx.interpreter.gas.remaining < cold_guard) {
         ctx.interpreter.halt(.out_of_gas);
         return;
@@ -611,24 +599,14 @@ pub fn opSelfdestruct(ctx: *InstructionContext) void {
         return;
     };
 
-    // Dynamic gas costs
-    var dyn_gas: u64 = 0;
+    // EIP-2929 (Berlin+, always active): cold account access cost for target.
+    var dyn_gas: u64 = if (result.is_cold) gas_costs.COLD_ACCOUNT_ACCESS else 0;
 
-    // Berlin+: cold account access cost for target (EIP-2929)
-    if (primitives.isEnabledIn(spec, .berlin) and result.is_cold) {
-        dyn_gas += gas_costs.COLD_ACCOUNT_ACCESS;
-    }
-
-    // G_NEWACCOUNT (25000) when the target account is new/empty:
-    //   EIP-150 (Tangerine Whistle) introduced G_NEWACCOUNT for SELFDESTRUCT.
-    //   Pre-EIP-150 (Frontier/Homestead): no G_NEWACCOUNT for SELFDESTRUCT (it was 0 gas total).
-    //   EIP-150 to pre-EIP-161: charged for ANY SELFDESTRUCT to a non-existent account.
-    //   EIP-161+ (Spurious Dragon+): only charged when value > 0 (had_value).
-    //   EIP-8037 (Amsterdam+): G_NEWACCOUNT replaced with STATE_BYTES_PER_NEW_ACCOUNT * cpsb state gas.
-    const selfdestruct_charges_new_account = !result.target_exists and
-        primitives.isEnabledIn(spec, .tangerine) and
-        (if (primitives.isEnabledIn(spec, .spurious_dragon)) result.had_value else true);
-    if (selfdestruct_charges_new_account and !primitives.isEnabledIn(spec, .amsterdam)) {
+    // G_NEWACCOUNT for value-bearing SELFDESTRUCT to a new account.
+    // EIP-161 (Spurious Dragon+, always active): only charge when had_value.
+    // EIP-8037 (Amsterdam+): replaced with state gas below.
+    const selfdestruct_charges_new_account = !result.target_exists and result.had_value;
+    if (selfdestruct_charges_new_account and !spec.amsterdam) {
         dyn_gas += 25000;
     }
 
@@ -637,11 +615,8 @@ pub fn opSelfdestruct(ctx: *InstructionContext) void {
         return;
     }
 
-    // EIP-8037 (Amsterdam+): charge state gas for new account via SELFDESTRUCT.
-    // Draws from reservoir first, spills to gas_left if needed.
-    // NOTE: do NOT untrack target on state-gas OOG — the cold access was already charged
-    // (regular gas passed above), so the target was genuinely accessed and belongs in the BAL.
-    if (selfdestruct_charges_new_account and primitives.isEnabledIn(spec, .amsterdam)) {
+    // EIP-8037 (Amsterdam+): state gas for new account via SELFDESTRUCT.
+    if (selfdestruct_charges_new_account and spec.amsterdam) {
         const cpsb = gas_costs.costPerStateByte(h.block.gas_limit);
         if (!ctx.interpreter.gas.spendStateGas(gas_costs.STATE_BYTES_PER_NEW_ACCOUNT * cpsb)) {
             ctx.interpreter.halt(.out_of_gas);
@@ -649,13 +624,18 @@ pub fn opSelfdestruct(ctx: *InstructionContext) void {
         }
     }
 
-    // Pre-London: SELFDESTRUCT gives a refund of R_SELFDESTRUCT (24000), but only on the
-    // FIRST selfdestruct of this account in the current transaction. Subsequent selfdestruct
-    // calls on the same already-destroyed account do not earn additional refunds.
-    // EIP-3529 (London) removed this refund entirely.
-    if (!primitives.isEnabledIn(spec, .london) and !result.previously_destroyed) {
-        ctx.interpreter.gas.refunded += gas_costs.R_SELFDESTRUCT;
-    }
+    // EIP-3529 (London+, always active): no SELFDESTRUCT refund.
 
     ctx.interpreter.halt(.selfdestruct);
+}
+
+/// Public InstructionFn-compatible entry for SELFDESTRUCT (Osaka spec).
+/// For Amsterdam behavior, use the table entry produced by protocol_schedule.
+pub fn opSelfdestruct(ctx: *InstructionContext) void {
+    opSelfdestructImpl(primitives.OSAKA, ctx);
+}
+
+/// Spec-parameterized SELFDESTRUCT for use with protocol_schedule.specialize().
+pub fn opSelfdestructSpec(comptime spec: primitives.Spec, ctx: *InstructionContext) void {
+    opSelfdestructImpl(spec, ctx);
 }

@@ -524,8 +524,8 @@ pub const Host = struct {
                 );
                 sub_interp.gas.reservoir = inputs.reservoir;
                 defer sub_interp.deinit();
-                const table = protocol_schedule.makeInstructionTable(spec_id);
-                _ = sub_interp.runWithHost(&table, self);
+                const table = protocol_schedule.tableForSpec(spec_id);
+                _ = sub_interp.runWithHost(table, self);
                 const rd: []const u8 = if (sub_interp.result.isSuccess() or sub_interp.result == .revert)
                     sub_interp.return_data.data
                 else
@@ -574,8 +574,8 @@ pub const Host = struct {
                     gas_limit,
                 );
                 defer sub_interp.deinit();
-                const table = protocol_schedule.makeInstructionTable(spec_id);
-                _ = sub_interp.runWithHost(&table, self);
+                const table = protocol_schedule.tableForSpec(spec_id);
+                _ = sub_interp.runWithHost(table, self);
                 const rd: []const u8 = if (sub_interp.result.isSuccess() or sub_interp.result == .revert)
                     sub_interp.return_data.data
                 else
@@ -706,14 +706,6 @@ fn setupCallCore(js: anytype, host: *Host, inputs: CallInputs, frame_depth: usiz
         {
             js.emitTransferLog(inputs.caller, inputs.target, inputs.value);
         }
-    } else if (inputs.value == 0 and inputs.scheme == .call and
-        !primitives.isEnabledIn(host.cfg.spec, .spurious_dragon) and
-        callee_acc.isLoadedAsNotExistingNotTouched())
-    {
-        // Pre-EIP-161 (Frontier/Homestead): a zero-value CALL to a non-existent address
-        // still creates it as an empty account ("touches" it). EIP-161 (Spurious Dragon)
-        // removed empty accounts on touch, making this a no-op; we skip it for those forks.
-        js.touchAccount(inputs.callee);
     }
 
     return .{ .ready = .{ .checkpoint = checkpoint, .code = code, .delegation_gas = delegation_gas } };
@@ -760,21 +752,11 @@ fn setupCreateCore(
 
     if (frame_depth >= MAX_CALL_DEPTH) return .{ .failed = CreateResult.preExecFailure(gas_limit) };
 
-    if (primitives.isEnabledIn(spec_id, .shanghai)) {
-        const max_initcode: usize = if (primitives.isEnabledIn(spec_id, .amsterdam))
-            primitives.AMSTERDAM_MAX_INITCODE_SIZE
-        else
-            primitives.MAX_INITCODE_SIZE;
-        if (init_code.len > max_initcode) return .{ .failed = CreateResult.preExecFailure(gas_limit) };
-    }
-
-    // Pre-Amsterdam: check balance BEFORE nonce bump (original EVM behavior).
-    if (!primitives.isEnabledIn(spec_id, .amsterdam) and value > 0) {
-        const acct = js.inner.evm_state.getPtr(caller) orelse
-            return .{ .failed = CreateResult.preExecFailure(gas_limit) };
-        if (acct.info.balance < value)
-            return .{ .failed = CreateResult.preExecFailure(gas_limit) };
-    }
+    const max_initcode: usize = if (primitives.isEnabledIn(spec_id, .amsterdam))
+        primitives.AMSTERDAM_MAX_INITCODE_SIZE
+    else
+        primitives.MAX_INITCODE_SIZE;
+    if (init_code.len > max_initcode) return .{ .failed = CreateResult.preExecFailure(gas_limit) };
 
     const caller_acc = js.inner.evm_state.getPtr(caller) orelse return .{ .failed = CreateResult.preExecFailure(gas_limit) };
     const pre_bump_checkpoint = if (is_opcode_create and primitives.isEnabledIn(spec_id, .amsterdam))
@@ -831,7 +813,7 @@ fn setupCreateCore(
         }
     }
 
-    const checkpoint = js.createAccountCheckpoint(caller, new_addr, value, spec_id) catch {
+    const checkpoint = js.createAccountCheckpoint(caller, new_addr, value) catch {
         return .{ .failed = CreateResult.failure() };
     };
 
@@ -873,11 +855,9 @@ fn finalizeCreateCore(
         js.checkpointRevert(checkpoint);
         return .{ .success = false, .is_revert = false, .address = [_]u8{0} ** 20, .gas_remaining = 0, .return_data = &[_]u8{}, .gas_refunded = 0, .state_gas_used = 0, .state_gas_remaining = gas_reservoir };
     }
-    if (primitives.isEnabledIn(spec_id, .london)) {
-        if (deployed_raw.len > 0 and deployed_raw[0] == 0xEF) {
-            js.checkpointRevert(checkpoint);
-            return .{ .success = false, .is_revert = false, .address = [_]u8{0} ** 20, .gas_remaining = 0, .return_data = &[_]u8{}, .gas_refunded = 0, .state_gas_used = 0, .state_gas_remaining = gas_reservoir };
-        }
+    if (deployed_raw.len > 0 and deployed_raw[0] == 0xEF) {
+        js.checkpointRevert(checkpoint);
+        return .{ .success = false, .is_revert = false, .address = [_]u8{0} ** 20, .gas_remaining = 0, .return_data = &[_]u8{}, .gas_refunded = 0, .state_gas_used = 0, .state_gas_remaining = gas_reservoir };
     }
 
     var gas_after_deposit: u64 = undefined;
@@ -910,13 +890,8 @@ fn finalizeCreateCore(
     } else {
         const deposit_cost = gas_costs.G_CODEDEPOSIT * @as(u64, @intCast(deployed_raw.len));
         if (gas_remaining < deposit_cost) {
-            if (primitives.isEnabledIn(spec_id, .homestead)) {
-                js.checkpointRevert(checkpoint);
-                return CreateResult.failure();
-            } else {
-                js.checkpointCommit();
-                return .{ .success = true, .is_revert = false, .address = new_addr, .gas_remaining = gas_remaining, .return_data = &[_]u8{}, .gas_refunded = gas_refunded, .state_gas_used = 0, .state_gas_remaining = 0 };
-            }
+            js.checkpointRevert(checkpoint);
+            return CreateResult.failure();
         }
         gas_after_deposit = gas_remaining - deposit_cost;
     }

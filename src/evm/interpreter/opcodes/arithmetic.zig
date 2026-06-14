@@ -142,13 +142,8 @@ pub fn opExp(ctx: *InstructionContext) void {
         return;
     }
     const exponent = stack.peekUnsafe(1);
-    // Dynamic gas: G_EXPBYTE per byte of exponent (10 pre-Spurious Dragon, 50 post)
-    const spec = ctx.interpreter.runtime_flags.spec_id;
-    const expbyte_cost: u64 = if (primitives.isEnabledIn(spec, .spurious_dragon))
-        gas_costs.G_EXPBYTE
-    else
-        gas_costs.G_EXPBYTE_FRONTIER;
-    const dynamic_gas = expbyte_cost * byteSize(exponent);
+    // EIP-160 (Spurious Dragon): G_EXPBYTE = 50. Always active post-Osaka.
+    const dynamic_gas = gas_costs.G_EXPBYTE * byteSize(exponent);
     if (!ctx.interpreter.gas.spend(dynamic_gas)) {
         ctx.interpreter.halt(.out_of_gas);
         return;

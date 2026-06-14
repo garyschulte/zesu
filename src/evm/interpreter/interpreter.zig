@@ -168,7 +168,7 @@ pub const RuntimeFlags = struct {
     pub fn default() RuntimeFlags {
         return RuntimeFlags{
             .is_static = false,
-            .spec_id = .prague,
+            .spec_id = .osaka,
         };
     }
 

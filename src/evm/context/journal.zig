@@ -102,7 +102,7 @@ pub const JournalEntry = union(enum) {
     AccountWarmed: primitives.Address,
     TransientStorageChanged: struct { address: primitives.Address, key: primitives.StorageKey, old_value: primitives.StorageValue },
 
-    pub fn revert(self: JournalEntry, evm_state: *state.EvmState, transient_storage: ?*state.TransientStorage, is_spurious_dragon_enabled: bool) void {
+    pub fn revert(self: JournalEntry, evm_state: *state.EvmState, transient_storage: ?*state.TransientStorage) void {
         switch (self) {
             .AccountTouched => |address| {
                 if (evm_state.getPtr(address)) |account| {
@@ -115,9 +115,7 @@ pub const JournalEntry = union(enum) {
                     if (data.is_created_globally) {
                         account.unmarkCreated();
                     }
-                    if (is_spurious_dragon_enabled) {
-                        account.info.nonce = 0;
-                    }
+                    account.info.nonce = 0;
                 }
             },
             .AccountDestroyed => |data| {
@@ -637,14 +635,12 @@ pub const JournalInner = struct {
 
     /// Discard the current transaction, by reverting the journal entries and incrementing the transaction id.
     pub fn discardTx(self: *JournalInner) void {
-        const is_spurious_dragon_enabled = primitives.isEnabledIn(self.spec, .spurious_dragon);
-
         // iterate over all journals entries and revert our global evm_state
         var i = self.journal.items.len;
         while (i > 0) {
             i -= 1;
             const entry = self.journal.swapRemove(i);
-            entry.revert(&self.evm_state, &self.transient_storage, is_spurious_dragon_enabled);
+            entry.revert(&self.evm_state, &self.transient_storage);
         }
 
         self.transient_storage.clearRetainingCapacity();
@@ -836,7 +832,7 @@ pub const JournalInner = struct {
     ///
     /// Panics if the caller is not loaded inside the EVM state.
     /// This should have been done inside `create_inner`.
-    pub fn createAccountCheckpoint(self: *JournalInner, caller: primitives.Address, target_address: primitives.Address, balance: primitives.U256, spec_id: primitives.SpecId) !JournalCheckpoint {
+    pub fn createAccountCheckpoint(self: *JournalInner, caller: primitives.Address, target_address: primitives.Address, balance: primitives.U256) !JournalCheckpoint {
         // Enter subroutine
         const checkpoint = self.getCheckpoint();
 
@@ -859,14 +855,11 @@ pub const JournalInner = struct {
         // this entry will revert set nonce.
         last_journal.append(alloc_mod.get(), JournalEntryFactory.accountCreated(target_address, is_created_globally)) catch {};
         target_acc.info.code = null;
-        // EIP-161: State trie clearing (invariant-preserving alternative)
-        if (primitives.isEnabledIn(spec_id, .spurious_dragon)) {
-            // nonce is going to be reset to zero in AccountCreated journal entry.
-            target_acc.info.nonce = 1;
-        }
+        // EIP-161: nonce set to 1 on create (reverted to 0 by AccountCreated journal entry on revert).
+        target_acc.info.nonce = 1;
 
-        // touch account. This is important as for pre SpuriousDragon account could be
-        // saved even empty.
+        // touch account.
+
         JournalInner.touchAccount(last_journal, target_address, target_acc);
 
         // Add balance to created account, as we already have target here.
@@ -905,7 +898,6 @@ pub const JournalInner = struct {
 
     /// Reverts all changes to evm_state until given checkpoint.
     pub fn checkpointRevert(self: *JournalInner, checkpoint: JournalCheckpoint) void {
-        const is_spurious_dragon_enabled = primitives.isEnabledIn(self.spec, .spurious_dragon);
         // Free heap-allocated data/topics of logs being discarded by this revert.
         for (self.logs.items[checkpoint.log_i..]) |log| log.deinit(alloc_mod.get());
         self.logs.shrinkRetainingCapacity(checkpoint.log_i);
@@ -918,7 +910,7 @@ pub const JournalInner = struct {
             while (i > checkpoint.journal_i) {
                 i -= 1;
                 const entry = self.journal.swapRemove(i);
-                entry.revert(&self.evm_state, &self.transient_storage, is_spurious_dragon_enabled);
+                entry.revert(&self.evm_state, &self.transient_storage);
             }
         }
     }
@@ -1058,11 +1050,9 @@ pub const JournalInner = struct {
         else
             SelfdestructionRevertStatus.RepeatedSelfdestruction;
 
-        const is_cancun_enabled = primitives.isEnabledIn(spec, .cancun);
-
-        // EIP-6780 (Cancun hard-fork): selfdestruct only if contract is created in the same tx
+        // EIP-6780: selfdestruct only if contract is created in the same tx (Cancun always active)
         const journal_entry: ?JournalEntry = entry_blk: {
-            if (acc.isCreatedLocally() or !is_cancun_enabled) {
+            if (acc.isCreatedLocally()) {
                 _ = acc.markSelfdestructedLocally();
                 acc.info.balance = @as(primitives.U256, 0);
                 break :entry_blk JournalEntryFactory.accountDestroyed(address, target, destroyed_status, balance);
@@ -1101,7 +1091,7 @@ pub const JournalInner = struct {
         //       the coinbase receiving its miner tip.  A second Burn log is emitted for
         //       this post-opcode ETH via `emitBurnLogs()` in `postExecution`.
         //
-        // Only accounts in `accounts_to_delete` (isCreatedLocally || pre-Cancun) are
+        // Only accounts in `accounts_to_delete` (isCreatedLocally) are
         // eligible for the finalization burn; pre-existing Cancun+ self-destructed accounts
         // are a no-op (no state change, no log).
         //
@@ -1115,10 +1105,10 @@ pub const JournalInner = struct {
                 // If this account is also in `accounts_to_delete`, register it for the
                 // finalization burn check: a payer may still send ETH to this address
                 // within the same transaction after the opcode returns.
-                if (acc.isCreatedLocally() or !is_cancun_enabled) {
+                if (acc.isCreatedLocally()) {
                     self.addPendingBurn(address, 0);
                 }
-            } else if (acc.isCreatedLocally() or !is_cancun_enabled) {
+            } else if (acc.isCreatedLocally()) {
                 // Case 1b: SELFDESTRUCT to self (same-tx-created or pre-Cancun).
                 // Emit Burn log immediately for the ETH destroyed right now, then register
                 // for the finalization burn check so that any ETH arriving *after* this
@@ -1127,8 +1117,7 @@ pub const JournalInner = struct {
                 if (balance > 0) self.addEip7708BurnLog(address, balance);
                 self.addPendingBurn(address, 0);
             }
-            // Case 2: SELFDESTRUCT to self on a pre-existing account (Cancun+).
-            // EIP-6780 makes this a no-op — state is unchanged, no log is emitted.
+            // Case 2: SELFDESTRUCT to self on a pre-existing account (EIP-6780 no-op).
         }
 
         return StateLoad(SelfDestructResult).new(SelfDestructResult{
@@ -1539,9 +1528,8 @@ pub fn Journal(comptime DB: type) type {
             self.inner.setCodeWithHash(address, code, hash);
         }
 
-        pub fn createAccountCheckpoint(self: *@This(), caller: primitives.Address, address: primitives.Address, balance: primitives.U256, spec_id: primitives.SpecId) !JournalCheckpoint {
-            // Ignore error.
-            return self.inner.createAccountCheckpoint(caller, address, balance, spec_id);
+        pub fn createAccountCheckpoint(self: *@This(), caller: primitives.Address, address: primitives.Address, balance: primitives.U256) !JournalCheckpoint {
+            return self.inner.createAccountCheckpoint(caller, address, balance);
         }
 
         pub fn takeLogs(self: *@This()) std.ArrayList(primitives.Log) {

@@ -100,6 +100,7 @@ pub const opExtcodehash = host_ops.opExtcodehash;
 pub const opBlockhash = host_ops.opBlockhash;
 pub const opSload = host_ops.opSload;
 pub const opSstore = host_ops.opSstore;
+pub const opSstoreSpec = host_ops.opSstoreSpec;
 pub const opTload = host_ops.opTload;
 pub const opTstore = host_ops.opTstore;
 pub const opLog0 = host_ops.opLog0;
@@ -108,6 +109,7 @@ pub const opLog2 = host_ops.opLog2;
 pub const opLog3 = host_ops.opLog3;
 pub const opLog4 = host_ops.opLog4;
 pub const opSelfdestruct = host_ops.opSelfdestruct;
+pub const opSelfdestructSpec = host_ops.opSelfdestructSpec;
 
 // System opcodes (RETURN, REVERT, INVALID)
 pub const system = @import("system.zig");
@@ -118,11 +120,17 @@ pub const opInvalid = system.opInvalid;
 // Call family opcodes
 pub const call_ops = @import("call.zig");
 pub const opCall = call_ops.opCall;
+pub const opCallSpec = call_ops.opCallSpec;
 pub const opCallcode = call_ops.opCallcode;
+pub const opCallcodeSpec = call_ops.opCallcodeSpec;
 pub const opDelegatecall = call_ops.opDelegatecall;
+pub const opDelegatecallSpec = call_ops.opDelegatecallSpec;
 pub const opStaticcall = call_ops.opStaticcall;
+pub const opStaticcallSpec = call_ops.opStaticcallSpec;
 pub const opCreate = call_ops.opCreate;
+pub const opCreateSpec = call_ops.opCreateSpec;
 pub const opCreate2 = call_ops.opCreate2;
+pub const opCreate2Spec = call_ops.opCreate2Spec;
 
 // Gas constants re-exported from the single source of truth
 const gas_costs = @import("../gas_costs.zig");

@@ -213,6 +213,26 @@ pub fn isEnabledIn(self: SpecId, other: SpecId) bool {
     return @intFromEnum(self) >= @intFromEnum(other);
 }
 
+/// Compile-time specification flags for post-Osaka EVM behavior.
+/// All pre-Osaka behavior is unconditional (always enabled in zesu).
+pub const Spec = struct {
+    amsterdam: bool = false,
+
+    /// Derive a modified Spec from this base by overriding specific fields.
+    pub fn override(base: Spec, comptime mods: anytype) Spec {
+        var s = base;
+        inline for (@typeInfo(@TypeOf(mods)).@"struct".fields) |f| {
+            @field(s, f.name) = @field(mods, f.name);
+        }
+        return s;
+    }
+};
+
+/// Base Osaka spec: no Amsterdam extensions.
+pub const OSAKA: Spec = .{};
+/// Amsterdam spec: all Osaka behavior plus Amsterdam extensions.
+pub const AMSTERDAM: Spec = .{ .amsterdam = true };
+
 /// String identifiers for hardforks.
 pub const HardforkName = struct {
     pub const FRONTIER = "Frontier";

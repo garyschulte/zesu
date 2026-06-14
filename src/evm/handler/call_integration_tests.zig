@@ -61,29 +61,17 @@ fn insertContract(db: *database.InMemoryDB, addr: primitives.Address, code: []co
 // Gas schedule constant tests
 // ---------------------------------------------------------------------------
 
-test "call gas schedule: pre-Berlin flat 700 (warm/cold ignored)" {
-    const cost_warm = gas_costs.getCallGasCost(.istanbul, false, false, true);
-    const cost_cold = gas_costs.getCallGasCost(.istanbul, true, false, true);
-    try std.testing.expectEqual(@as(u64, 700), cost_warm);
-    try std.testing.expectEqual(@as(u64, 700), cost_cold); // cold flag has no effect pre-Berlin
-}
-
-test "call gas schedule: Berlin+ uses access cost only — no 700 double-charge" {
-    const cold = gas_costs.getCallGasCost(.berlin, true, false, true);
-    const warm = gas_costs.getCallGasCost(.berlin, false, false, true);
+test "call gas schedule: cold/warm access cost (Berlin+ model, always active)" {
+    const cold = gas_costs.getCallGasCost(false, true, false, true);
+    const warm = gas_costs.getCallGasCost(false, false, false, true);
     try std.testing.expectEqual(@as(u64, 2600), cold);
     try std.testing.expectEqual(@as(u64, 100), warm);
 }
 
-test "call gas schedule: Prague warm + value transfer" {
+test "call gas schedule: warm + value transfer (Osaka)" {
     // warm (100) + G_CALLVALUE (9000) = 9100
-    const cost = gas_costs.getCallGasCost(.prague, false, true, true);
+    const cost = gas_costs.getCallGasCost(false, false, true, true);
     try std.testing.expectEqual(@as(u64, 9100), cost);
-}
-
-test "call gas schedule: Frontier is 40" {
-    const cost = gas_costs.getCallGasCost(.frontier, false, false, true);
-    try std.testing.expectEqual(@as(u64, 40), cost);
 }
 
 // ---------------------------------------------------------------------------

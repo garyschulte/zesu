@@ -419,13 +419,10 @@ pub fn opDifficulty(ctx: *InstructionContext) void {
         return;
     }
 
-    // After Paris (EIP-4399): use prevrandao if available
-    const spec = ctx.interpreter.runtime_flags.spec_id;
-    if (primitives.isEnabledIn(spec, .merge)) {
-        if (h.prevrandao()) |pr| {
-            stack.pushUnsafe(host_module.hashToU256(pr));
-            return;
-        }
+    // EIP-4399 (Merge): DIFFICULTY opcode returns PREVRANDAO. Always active post-Osaka.
+    if (h.prevrandao()) |pr| {
+        stack.pushUnsafe(host_module.hashToU256(pr));
+        return;
     }
     stack.pushUnsafe(h.difficulty());
 }
