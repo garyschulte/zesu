@@ -80,7 +80,7 @@ const EIP8282_EXIT_ADDRESS: input.Address = .{
 /// contract must not invalidate the block.
 fn runSystemCall(
     ctx: anytype,
-    instructions: *handler_mod.Instructions,
+    instructions: anytype,
     precompiles: *handler_mod.Precompiles,
     target: input.Address,
     calldata: []const u8,
@@ -150,8 +150,8 @@ fn runSystemCall(
     ctx.tx.authorization_list = null;
     ctx.tx.chain_id = chain_id;
 
-    var frames = handler_mod.FrameStack.new();
     const EvmT = handler_mod.EvmFor(@TypeOf(ctx.*).DatabaseType);
+    var frames = handler_mod.FrameStack(@TypeOf(ctx.*).DatabaseType).new();
     var evm = EvmT.init(ctx, null, instructions, precompiles, &frames);
     var result = handler_mod.ExecuteEvm.execute(&evm) catch {
         ctx.journaled_state.discardTx();
@@ -180,7 +180,7 @@ fn runSystemCall(
 /// calldata; the contract code handles the storage write.
 pub fn applyPreBlockCalls(
     ctx: anytype,
-    instructions: *handler_mod.Instructions,
+    instructions: anytype,
     precompiles: *handler_mod.Precompiles,
     env: input.Env,
     spec: primitives.SpecId,
@@ -220,7 +220,7 @@ pub const PostBlockRequestBytes = struct {
 pub fn applyPostBlockCallsCapture(
     alloc: std.mem.Allocator,
     ctx: anytype,
-    instructions: *handler_mod.Instructions,
+    instructions: anytype,
     precompiles: *handler_mod.Precompiles,
     spec: primitives.SpecId,
     chain_id: u64,
@@ -246,7 +246,7 @@ pub fn applyPostBlockCallsCapture(
 fn runSystemCallCapture(
     alloc: std.mem.Allocator,
     ctx: anytype,
-    instructions: *handler_mod.Instructions,
+    instructions: anytype,
     precompiles: *handler_mod.Precompiles,
     target: input.Address,
     calldata: []const u8,
@@ -308,8 +308,8 @@ fn runSystemCallCapture(
     ctx.tx.authorization_list = null;
     ctx.tx.chain_id = chain_id;
 
-    var frames = handler_mod.FrameStack.new();
     const EvmT = handler_mod.EvmFor(@TypeOf(ctx.*).DatabaseType);
+    var frames = handler_mod.FrameStack(@TypeOf(ctx.*).DatabaseType).new();
     var evm = EvmT.init(ctx, null, instructions, precompiles, &frames);
 
     var initial_gas = handler_mod.InitialAndFloorGas{ .initial_gas = 0, .floor_gas = 0 };

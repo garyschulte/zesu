@@ -92,7 +92,7 @@ test "SSTORE EIP-2200: fails when gas_remaining <= 2300 (Istanbul+)" {
     _ = try ctx.journaled_state.loadAccount(CALLER);
     _ = try ctx.journaled_state.loadAccount(CALLEE);
 
-    var host = interpreter_mod.Host.fromCtx(&ctx, null);
+    var host = interpreter_mod.host_module.fromCtx(&ctx, null);
 
     // Exactly 2300 gas — EIP-2200 guard fires before SSTORE
     const result = host.call(.{
@@ -123,7 +123,7 @@ test "SSTORE EIP-2200: succeeds with sufficient gas" {
     _ = try ctx.journaled_state.loadAccount(CALLER);
     _ = try ctx.journaled_state.loadAccount(CALLEE);
 
-    var host = interpreter_mod.Host.fromCtx(&ctx, null);
+    var host = interpreter_mod.host_module.fromCtx(&ctx, null);
 
     // 50,000 gas — plenty for SSTORE set (20000 + SLOAD overhead)
     const result = host.call(.{
@@ -163,7 +163,7 @@ test "gas refund propagation: SSTORE clear in sub-call surfaces in CallResult" {
     // Pre-warm and set slot 0 to non-zero so clearing it earns a refund
     _ = try ctx.journaled_state.sstore(CALLEE, 0, 1);
 
-    var host = interpreter_mod.Host.fromCtx(&ctx, null);
+    var host = interpreter_mod.host_module.fromCtx(&ctx, null);
 
     const result = host.call(.{
         .caller = CALLER,

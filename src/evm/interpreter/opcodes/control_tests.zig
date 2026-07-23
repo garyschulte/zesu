@@ -1,17 +1,21 @@
 const std = @import("std");
 const primitives = @import("primitives");
+const database = @import("database");
 const bytecode_mod = @import("bytecode");
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const ExtBytecode = @import("../interpreter.zig").ExtBytecode;
 const InstructionContext = @import("../instruction_context.zig").InstructionContext;
 const control = @import("control.zig");
 
-const opStop = control.opStop;
-const opJump = control.opJump;
-const opJumpi = control.opJumpi;
-const opJumpdest = control.opJumpdest;
-const opPc = control.opPc;
-const opGas = control.opGas;
+/// No host needed in these tests — bind the dispatch table to any concrete DB.
+const TestDB = database.InMemoryDB;
+const ops = control.Ops(TestDB);
+const opStop = ops.opStop;
+const opJump = ops.opJump;
+const opJumpi = ops.opJumpi;
+const opJumpdest = ops.opJumpdest;
+const opPc = ops.opPc;
+const opGas = ops.opGas;
 
 const expectEqual = std.testing.expectEqual;
 const expect = std.testing.expect;
@@ -21,7 +25,7 @@ const U = primitives.U256;
 
 test "STOP: halts execution with .stop" {
     var interp = Interpreter.defaultExt();
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opStop(&ctx);
     try expect(!interp.bytecode.continue_execution);
     try expectEqual(.stop, interp.result);
@@ -31,7 +35,7 @@ test "STOP: halts execution with .stop" {
 
 test "JUMPDEST: no-op, does not halt" {
     var interp = Interpreter.defaultExt();
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opJumpdest(&ctx);
     try expect(interp.bytecode.continue_execution);
 }
@@ -41,7 +45,7 @@ test "JUMPDEST: no-op, does not halt" {
 test "PC: push program counter" {
     var interp = Interpreter.defaultExt();
     interp.bytecode.pc = 43; // simulate step() having advanced PC past opcode
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opPc(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 42), interp.stack.popUnsafe()); // pc - 1
@@ -50,7 +54,7 @@ test "PC: push program counter" {
 test "PC: zero" {
     var interp = Interpreter.defaultExt();
     interp.bytecode.pc = 1; // step() advances before calling handler
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opPc(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -60,7 +64,7 @@ test "PC: stack overflow" {
     interp.bytecode.pc = 1;
     var i: usize = 0;
     while (i < 1024) : (i += 1) interp.stack.pushUnsafe(@as(U, i));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opPc(&ctx);
     try expectEqual(.stack_overflow, interp.result);
 }
@@ -71,7 +75,7 @@ test "GAS: push remaining gas" {
     var interp = Interpreter.defaultExt();
     const Gas = @import("../gas.zig").Gas;
     interp.gas = Gas.new(1000);
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opGas(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 1000), interp.stack.popUnsafe());
@@ -81,7 +85,7 @@ test "GAS: stack overflow" {
     var interp = Interpreter.defaultExt();
     var i: usize = 0;
     while (i < 1024) : (i += 1) interp.stack.pushUnsafe(@as(U, i));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opGas(&ctx);
     try expectEqual(.stack_overflow, interp.result);
 }
@@ -95,7 +99,7 @@ test "JUMP: valid jump to JUMPDEST" {
     const code = [_]u8{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x5B }; // 0x5B = JUMPDEST
     interp.bytecode = ExtBytecode.newOwned(bytecode_mod.Bytecode.newLegacy(&code));
     interp.stack.pushUnsafe(@as(U, 5));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opJump(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(usize, 5), interp.bytecode.pc);
@@ -107,7 +111,7 @@ test "JUMP: invalid destination (no JUMPDEST)" {
     const code = [_]u8{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
     interp.bytecode = ExtBytecode.newOwned(bytecode_mod.Bytecode.newLegacy(&code));
     interp.stack.pushUnsafe(@as(U, 5));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opJump(&ctx);
     try expectEqual(.invalid_jump, interp.result);
 }
@@ -118,7 +122,7 @@ test "JUMP: out of bounds destination" {
     const code = [_]u8{ 0x00, 0x00 };
     interp.bytecode = ExtBytecode.newOwned(bytecode_mod.Bytecode.newLegacy(&code));
     interp.stack.pushUnsafe(@as(U, 100));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opJump(&ctx);
     try expectEqual(.invalid_jump, interp.result);
 }
@@ -128,7 +132,7 @@ test "JUMP: stack underflow" {
     defer interp.deinit();
     const code = [_]u8{0x5B};
     interp.bytecode = ExtBytecode.newOwned(bytecode_mod.Bytecode.newLegacy(&code));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opJump(&ctx);
     try expectEqual(.stack_underflow, interp.result);
 }
@@ -142,7 +146,7 @@ test "JUMPI: condition true => jump" {
     interp.bytecode = ExtBytecode.newOwned(bytecode_mod.Bytecode.newLegacy(&code));
     interp.stack.pushUnsafe(@as(U, 1)); // condition (non-zero = true)
     interp.stack.pushUnsafe(@as(U, 5)); // destination
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opJumpi(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(usize, 5), interp.bytecode.pc);
@@ -156,7 +160,7 @@ test "JUMPI: condition false => no jump" {
     interp.bytecode.pc = 10; // pretend we're at position 10
     interp.stack.pushUnsafe(@as(U, 0)); // condition = false
     interp.stack.pushUnsafe(@as(U, 5)); // destination (not taken)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opJumpi(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(usize, 10), interp.bytecode.pc); // PC unchanged
@@ -169,7 +173,7 @@ test "JUMPI: condition true but invalid destination" {
     interp.bytecode = ExtBytecode.newOwned(bytecode_mod.Bytecode.newLegacy(&code));
     interp.stack.pushUnsafe(@as(U, 1));
     interp.stack.pushUnsafe(@as(U, 5));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opJumpi(&ctx);
     try expectEqual(.invalid_jump, interp.result);
 }
@@ -181,7 +185,7 @@ test "JUMPI: MAX condition is true" {
     interp.bytecode = ExtBytecode.newOwned(bytecode_mod.Bytecode.newLegacy(&code));
     interp.stack.pushUnsafe(std.math.maxInt(U));
     interp.stack.pushUnsafe(@as(U, 5));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opJumpi(&ctx);
     try expectEqual(@as(usize, 5), interp.bytecode.pc);
 }
@@ -192,7 +196,7 @@ test "JUMPI: stack underflow" {
     const code = [_]u8{0x5B};
     interp.bytecode = ExtBytecode.newOwned(bytecode_mod.Bytecode.newLegacy(&code));
     interp.stack.pushUnsafe(@as(U, 1)); // only 1 value, need 2
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opJumpi(&ctx);
     try expectEqual(.stack_underflow, interp.result);
 }

@@ -9,11 +9,13 @@ const Interpreter = @import("../interpreter.zig").Interpreter;
 const ExtBytecode = @import("../interpreter.zig").ExtBytecode;
 const Gas = @import("../gas.zig").Gas;
 const InstructionContext = @import("../instruction_context.zig").InstructionContext;
-const Host = @import("../host.zig").Host;
 const host_module = @import("../host.zig");
 const gas_costs = @import("../gas_costs.zig");
 
 const host_ops = @import("host_ops.zig");
+
+const TestDB = database_mod.InMemoryDB;
+const ops = host_ops.Ops(TestDB);
 
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
@@ -63,10 +65,10 @@ test "SLOAD: slot present in state returns stored value" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(KEY);
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSload(&ic);
+    ops.opSload(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(VALUE, interp.stack.popUnsafe());
@@ -81,10 +83,10 @@ test "SLOAD: slot absent returns zero" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(@as(U, 0x1234)); // key with no storage entry
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSload(&ic);
+    ops.opSload(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
@@ -93,9 +95,9 @@ test "SLOAD: slot absent returns zero" {
 test "SLOAD: no host halts with invalid_opcode" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(@as(U, 1));
-    var ic = InstructionContext{ .interpreter = &interp }; // host = null
+    var ic = InstructionContext(TestDB){ .interpreter = &interp }; // host = null
 
-    host_ops.opSload(&ic);
+    ops.opSload(&ic);
 
     try expectEqual(.invalid_opcode, interp.result);
 }
@@ -105,10 +107,10 @@ test "SLOAD: stack underflow halts" {
     var ctx = makeCtx(db);
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSload(&ic);
+    ops.opSload(&ic);
 
     try expectEqual(.stack_underflow, interp.result);
 }
@@ -126,10 +128,10 @@ test "SLOAD: cold access charges COLD_SLOAD gas (Berlin+)" {
     interp.gas = Gas.new(GAS_LIMIT);
     interp.stack.pushUnsafe(KEY);
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSload(&ic);
+    ops.opSload(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(GAS_LIMIT - gas_costs.COLD_SLOAD, interp.gas.remaining);
@@ -147,12 +149,12 @@ test "SLOAD: second access to same slot charges WARM_SLOAD gas" {
 
     var interp = makeInterp();
     interp.gas = Gas.new(GAS_LIMIT);
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
     // First access: cold
     interp.stack.pushUnsafe(KEY);
-    host_ops.opSload(&ic);
+    ops.opSload(&ic);
     try expect(interp.bytecode.continue_execution);
     _ = interp.stack.popUnsafe(); // discard value
 
@@ -161,7 +163,7 @@ test "SLOAD: second access to same slot charges WARM_SLOAD gas" {
 
     // Second access: warm
     interp.stack.pushUnsafe(KEY);
-    host_ops.opSload(&ic);
+    ops.opSload(&ic);
     try expect(interp.bytecode.continue_execution);
 
     try expectEqual(after_cold - gas_costs.WARM_SLOAD, interp.gas.remaining);
@@ -180,10 +182,10 @@ test "SLOAD: out of gas halts with out_of_gas" {
     interp.gas = Gas.new(gas_costs.COLD_SLOAD - 1);
     interp.stack.pushUnsafe(KEY);
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSload(&ic);
+    ops.opSload(&ic);
 
     try expectEqual(.out_of_gas, interp.result);
 }
@@ -206,17 +208,17 @@ test "SSTORE: writes value verifiable via sload" {
     interp.stack.pushUnsafe(VALUE);
     interp.stack.pushUnsafe(KEY);
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSstore(&ic);
+    ops.opSstore(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(usize, 0), interp.stack.len());
 
     // Verify the value was written via sload
     interp.stack.pushUnsafe(KEY);
-    host_ops.opSload(&ic);
+    ops.opSload(&ic);
     try expectEqual(VALUE, interp.stack.popUnsafe());
 }
 
@@ -229,10 +231,10 @@ test "SSTORE: static context halts with invalid_static" {
     interp.stack.pushUnsafe(@as(U, 0));
     interp.stack.pushUnsafe(@as(U, 1));
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSstore(&ic);
+    ops.opSstore(&ic);
 
     try expectEqual(.invalid_static, interp.result);
 }
@@ -241,9 +243,9 @@ test "SSTORE: no host halts with invalid_opcode" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(@as(U, 0));
     interp.stack.pushUnsafe(@as(U, 1));
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    host_ops.opSstore(&ic);
+    ops.opSstore(&ic);
 
     try expectEqual(.invalid_opcode, interp.result);
 }
@@ -255,10 +257,10 @@ test "SSTORE: stack underflow halts" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(@as(U, 1)); // only 1 item, need 2
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSstore(&ic);
+    ops.opSstore(&ic);
 
     try expectEqual(.stack_underflow, interp.result);
 }
@@ -272,18 +274,18 @@ test "TSTORE then TLOAD round-trips a value" {
     var ctx = makeCtx(db);
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
     // TSTORE: stack [key (top), value]
     interp.stack.pushUnsafe(@as(U, 99)); // value
     interp.stack.pushUnsafe(@as(U, 5)); // key (top)
-    host_ops.opTstore(&ic);
+    ops.opTstore(&ic);
     try expect(interp.bytecode.continue_execution);
 
     // TLOAD: stack [key (top)]
     interp.stack.pushUnsafe(@as(U, 5));
-    host_ops.opTload(&ic);
+    ops.opTload(&ic);
     try expectEqual(@as(U, 99), interp.stack.popUnsafe());
 }
 
@@ -294,10 +296,10 @@ test "TLOAD: unset key returns zero" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(@as(U, 7)); // key not set
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opTload(&ic);
+    ops.opTload(&ic);
 
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -311,10 +313,10 @@ test "TSTORE: static context halts with invalid_static" {
     interp.stack.pushUnsafe(@as(U, 0));
     interp.stack.pushUnsafe(@as(U, 1));
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opTstore(&ic);
+    ops.opTstore(&ic);
 
     try expectEqual(.invalid_static, interp.result);
 }
@@ -322,9 +324,9 @@ test "TSTORE: static context halts with invalid_static" {
 test "TLOAD: no host halts with invalid_opcode" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(@as(U, 1));
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    host_ops.opTload(&ic);
+    ops.opTload(&ic);
 
     try expectEqual(.invalid_opcode, interp.result);
 }
@@ -343,10 +345,10 @@ test "BALANCE: returns correct balance for known account" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(host_module.addressToU256(OTHER));
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opBalance(&ic);
+    ops.opBalance(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(BAL, interp.stack.popUnsafe());
@@ -363,10 +365,10 @@ test "BALANCE: cold access charges COLD_ACCOUNT_ACCESS gas (Berlin+)" {
     interp.gas = Gas.new(GAS_LIMIT);
     interp.stack.pushUnsafe(host_module.addressToU256(OTHER));
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opBalance(&ic);
+    ops.opBalance(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(GAS_LIMIT - gas_costs.COLD_ACCOUNT_ACCESS, interp.gas.remaining);
@@ -375,9 +377,9 @@ test "BALANCE: cold access charges COLD_ACCOUNT_ACCESS gas (Berlin+)" {
 test "BALANCE: no host halts with invalid_opcode" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(host_module.addressToU256(OTHER));
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    host_ops.opBalance(&ic);
+    ops.opBalance(&ic);
 
     try expectEqual(.invalid_opcode, interp.result);
 }
@@ -387,10 +389,10 @@ test "BALANCE: stack underflow halts" {
     var ctx = makeCtx(db);
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opBalance(&ic);
+    ops.opBalance(&ic);
 
     try expectEqual(.stack_underflow, interp.result);
 }
@@ -408,10 +410,10 @@ test "SELFBALANCE: returns balance of executing contract" {
 
     var interp = makeInterp(); // interp.input.target = TARGET
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSelfbalance(&ic);
+    ops.opSelfbalance(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(BAL, interp.stack.popUnsafe());
@@ -419,9 +421,9 @@ test "SELFBALANCE: returns balance of executing contract" {
 
 test "SELFBALANCE: no host halts with invalid_opcode" {
     var interp = makeInterp();
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    host_ops.opSelfbalance(&ic);
+    ops.opSelfbalance(&ic);
 
     try expectEqual(.invalid_opcode, interp.result);
 }
@@ -439,10 +441,10 @@ test "EXTCODESIZE: EOA with empty code returns 0" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(host_module.addressToU256(OTHER));
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opExtcodesize(&ic);
+    ops.opExtcodesize(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
@@ -451,9 +453,9 @@ test "EXTCODESIZE: EOA with empty code returns 0" {
 test "EXTCODESIZE: no host halts with invalid_opcode" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(host_module.addressToU256(OTHER));
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    host_ops.opExtcodesize(&ic);
+    ops.opExtcodesize(&ic);
 
     try expectEqual(.invalid_opcode, interp.result);
 }
@@ -463,10 +465,10 @@ test "EXTCODESIZE: stack underflow halts" {
     var ctx = makeCtx(db);
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opExtcodesize(&ic);
+    ops.opExtcodesize(&ic);
 
     try expectEqual(.stack_underflow, interp.result);
 }
@@ -482,10 +484,10 @@ test "EXTCODEHASH: empty account returns 0" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(host_module.addressToU256(OTHER));
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opExtcodehash(&ic);
+    ops.opExtcodehash(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
@@ -494,9 +496,9 @@ test "EXTCODEHASH: empty account returns 0" {
 test "EXTCODEHASH: no host halts with invalid_opcode" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(host_module.addressToU256(OTHER));
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    host_ops.opExtcodehash(&ic);
+    ops.opExtcodehash(&ic);
 
     try expectEqual(.invalid_opcode, interp.result);
 }
@@ -518,10 +520,10 @@ test "BLOCKHASH: known block returns hash" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(@as(U, BLOCK_NUM));
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opBlockhash(&ic);
+    ops.opBlockhash(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(host_module.hashToU256(HASH), interp.stack.popUnsafe());
@@ -534,10 +536,10 @@ test "BLOCKHASH: unknown block returns 0" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(@as(U, 999));
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opBlockhash(&ic);
+    ops.opBlockhash(&ic);
 
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -545,9 +547,9 @@ test "BLOCKHASH: unknown block returns 0" {
 test "BLOCKHASH: no host halts with invalid_opcode" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(@as(U, 1));
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    host_ops.opBlockhash(&ic);
+    ops.opBlockhash(&ic);
 
     try expectEqual(.invalid_opcode, interp.result);
 }
@@ -565,10 +567,10 @@ test "LOG0: emits log with correct address and empty data" {
     interp.stack.pushUnsafe(@as(U, 0)); // size
     interp.stack.pushUnsafe(@as(U, 0)); // offset (top)
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opLog0(&ic);
+    ops.opLog0(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(usize, 0), interp.stack.len());
@@ -594,10 +596,10 @@ test "LOG1: emits log with one topic" {
     interp.stack.pushUnsafe(@as(U, 0)); // size (depth 1)
     interp.stack.pushUnsafe(@as(U, 0)); // offset (top)
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opLog1(&ic);
+    ops.opLog1(&ic);
 
     try expect(interp.bytecode.continue_execution);
 
@@ -616,10 +618,10 @@ test "LOG0: static context halts with invalid_static" {
     interp.stack.pushUnsafe(@as(U, 0)); // size
     interp.stack.pushUnsafe(@as(U, 0)); // offset
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opLog0(&ic);
+    ops.opLog0(&ic);
 
     try expectEqual(.invalid_static, interp.result);
 }
@@ -637,10 +639,10 @@ test "LOG4: emits log with four topics" {
     interp.stack.pushUnsafe(@as(U, 0)); // size
     interp.stack.pushUnsafe(@as(U, 0)); // offset (top)
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opLog4(&ic);
+    ops.opLog4(&ic);
 
     try expect(interp.bytecode.continue_execution);
 
@@ -653,9 +655,9 @@ test "LOG0: no host halts with invalid_opcode" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(@as(U, 0));
     interp.stack.pushUnsafe(@as(U, 0));
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    host_ops.opLog0(&ic);
+    ops.opLog0(&ic);
 
     try expectEqual(.invalid_opcode, interp.result);
 }
@@ -674,10 +676,10 @@ test "SELFDESTRUCT: halts with selfdestruct result" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(host_module.addressToU256(OTHER)); // target address
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSelfdestruct(&ic);
+    ops.opSelfdestruct(&ic);
 
     try expectEqual(.selfdestruct, interp.result);
 }
@@ -690,10 +692,10 @@ test "SELFDESTRUCT: static context halts with invalid_static" {
     interp.runtime_flags.is_static = true;
     interp.stack.pushUnsafe(host_module.addressToU256(OTHER));
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSelfdestruct(&ic);
+    ops.opSelfdestruct(&ic);
 
     try expectEqual(.invalid_static, interp.result);
 }
@@ -701,9 +703,9 @@ test "SELFDESTRUCT: static context halts with invalid_static" {
 test "SELFDESTRUCT: no host halts with invalid_opcode" {
     var interp = makeInterp();
     interp.stack.pushUnsafe(host_module.addressToU256(OTHER));
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    host_ops.opSelfdestruct(&ic);
+    ops.opSelfdestruct(&ic);
 
     try expectEqual(.invalid_opcode, interp.result);
 }
@@ -713,10 +715,10 @@ test "SELFDESTRUCT: stack underflow halts" {
     var ctx = makeCtx(db);
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    host_ops.opSelfdestruct(&ic);
+    ops.opSelfdestruct(&ic);
 
     try expectEqual(.stack_underflow, interp.result);
 }

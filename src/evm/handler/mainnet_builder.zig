@@ -19,9 +19,9 @@ const validation = @import("validation.zig");
 /// Call `evm.destroy()` when done to free the heap allocation.
 pub const MainnetEvm = struct {
     /// Owned instruction table and precompile set (stable addresses — do NOT move this struct).
-    instructions: main.Instructions,
+    instructions: main.Instructions(database.InMemoryDB),
     precompiles: main.Precompiles,
-    frame_stack: main.FrameStack,
+    frame_stack: main.FrameStack(database.InMemoryDB),
     /// Inner Evm whose `instructions`/`precompiles`/`frame_stack` pointers reference the fields above.
     evm: main.Evm,
 
@@ -31,12 +31,12 @@ pub const MainnetEvm = struct {
     }
 
     /// Create an execution frame.
-    pub fn createFrame(self: *MainnetEvm, frame_data: main.FrameData) !main.Frame {
+    pub fn createFrame(self: *MainnetEvm, frame_data: main.FrameData) !main.Frame(database.InMemoryDB) {
         return self.evm.createFrame(frame_data);
     }
 
     /// Execute a frame (delegates to the inner Evm).
-    pub fn executeFrame(self: *MainnetEvm, frame: *main.Frame) !main.FrameResult {
+    pub fn executeFrame(self: *MainnetEvm, frame: *main.Frame(database.InMemoryDB)) !main.FrameResult {
         return self.evm.executeFrame(frame);
     }
 
@@ -62,9 +62,9 @@ pub const MainBuilder = struct {
     pub fn buildMainnet(self: *MainnetContext) *MainnetEvm {
         const spec = self.cfg.spec;
         const owned = alloc_mod.get().create(MainnetEvm) catch @panic("OOM in buildMainnet");
-        owned.instructions = main.Instructions.new(spec);
+        owned.instructions = main.Instructions(database.InMemoryDB).new(spec);
         owned.precompiles = main.Precompiles.new(spec);
-        owned.frame_stack = main.FrameStack.newPrealloc(8);
+        owned.frame_stack = main.FrameStack(database.InMemoryDB).newPrealloc(8);
         owned.evm = main.Evm.init(self, null, &owned.instructions, &owned.precompiles, &owned.frame_stack);
         // EIP-2929: precompiles are always warm — set once per block at construction.
         self.journaled_state.inner.warm_addresses.setPrecompileBitset(owned.precompiles.precompiles.precompile_bitset);
@@ -76,9 +76,9 @@ pub const MainBuilder = struct {
     pub fn buildMainnetWithInspector(self: *MainnetContext, inspector: *main.Inspector) *MainnetEvm {
         const spec = self.cfg.spec;
         const owned = alloc_mod.get().create(MainnetEvm) catch @panic("OOM in buildMainnetWithInspector");
-        owned.instructions = main.Instructions.new(spec);
+        owned.instructions = main.Instructions(database.InMemoryDB).new(spec);
         owned.precompiles = main.Precompiles.new(spec);
-        owned.frame_stack = main.FrameStack.newPrealloc(8);
+        owned.frame_stack = main.FrameStack(database.InMemoryDB).newPrealloc(8);
         owned.evm = main.Evm.init(self, inspector, &owned.instructions, &owned.precompiles, &owned.frame_stack);
         // EIP-2929: precompiles are always warm — set once per block at construction.
         self.journaled_state.inner.warm_addresses.setPrecompileBitset(owned.precompiles.precompiles.precompile_bitset);
@@ -373,7 +373,7 @@ pub const MainnetHandler = struct {
             0;
 
         const DB = @TypeOf(ctx.*).DatabaseType;
-        var host = interpreter_mod.Host.init(DB, ctx, &evm.precompiles.precompiles);
+        var host = interpreter_mod.Host(DB).init(ctx, &evm.precompiles.precompiles);
 
         var return_data_buf: std.ArrayList(u8) = .empty;
         defer return_data_buf.deinit(alloc_mod.get());
@@ -436,7 +436,7 @@ pub const MainnetHandler = struct {
                                 return fr;
                             }
                         }
-                        const ir = try executeIterative(root_interp, &host, &return_data_buf);
+                        const ir = try executeIterative(DB, root_interp, &host, &return_data_buf);
                         var cr = host.finalizeCreate(s.checkpoint, s.new_addr, ir.raw_result, ir.gas_remaining, ir.gas_refunded, ir.return_data, spec, false, ir.reservoir_remaining);
                         if (cr.success) {
                             cr.state_gas_used += ir.state_gas_used;
@@ -674,7 +674,7 @@ pub const MainnetHandler = struct {
                         return main.FrameResult.new(main.ExecutionResult.new(.Fail, exec_gas), 0, 0);
                     }
                 }
-                const ir = try executeIterative(root_interp, &host, &return_data_buf);
+                const ir = try executeIterative(DB, root_interp, &host, &return_data_buf);
 
                 if (ir.raw_result.isSuccess()) {
                     ctx.journaled_state.checkpointCommit();
@@ -869,8 +869,9 @@ const FrameEntry = struct {
 /// sub-frames by pushing/popping FrameEntry items instead of recursing natively.
 /// `return_data_buf` is owned by the caller and accumulates return data.
 fn executeIterative(
+    comptime DB: type,
     root_interp: interpreter_mod.Interpreter,
-    host: *interpreter_mod.Host,
+    host: *interpreter_mod.Host(DB),
     return_data_buf: *std.ArrayList(u8),
 ) !IterativeResult {
     const call_ops = interpreter_mod.opcodes.call_ops;
@@ -888,13 +889,13 @@ fn executeIterative(
     try frames.append(alloc_mod.get(), .{ .interp = root_ptr, .cause = null });
 
     // Build instruction table once: spec is constant for the lifetime of a block.
-    const schedule = interpreter_mod.protocol_schedule.makeInstructionTable(root_interp.runtime_flags.spec_id);
+    const schedule = interpreter_mod.protocol_schedule.makeInstructionTable(DB, root_interp.runtime_flags.spec_id);
 
     while (true) {
         const frame = &frames.items[frames.items.len - 1];
         const spec = frame.interp.runtime_flags.spec_id;
 
-        _ = frame.interp.runWithHost(&schedule, host);
+        _ = frame.interp.runWithHost(DB, &schedule, host);
 
         if (frame.interp.pending != .none) {
             // Sub-frame needed. The opcode already called setupCall/setupCreate and stored

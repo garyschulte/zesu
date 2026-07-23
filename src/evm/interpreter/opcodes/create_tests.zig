@@ -19,14 +19,17 @@ const call_ops = @import("call.zig");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 
+const TestDB = database_mod.InMemoryDB;
+const ops = call_ops.Ops(TestDB);
+
 /// Run any pending CREATE/CALL sub-frame synchronously and apply the result to the parent
 /// interpreter.  Used only in tests where the full iterative runner is not available.
-fn runPendingCreate(host: *Host, interp: *Interpreter, spec: primitives.SpecId) void {
+fn runPendingCreate(host: *Host(TestDB), interp: *Interpreter, spec: primitives.SpecId) void {
     switch (interp.pending) {
         .none => {},
         .call => {}, // not handled here (no CALL tests in this file)
         .create => |pc| {
-            const table = protocol_schedule.makeInstructionTable(spec);
+            const table = protocol_schedule.makeInstructionTable(TestDB, spec);
             const init_bc = bytecode_mod.Bytecode.newRaw(pc.inputs.init_code);
             var sub = Interpreter.new(
                 Memory.new(),
@@ -37,7 +40,7 @@ fn runPendingCreate(host: *Host, interp: *Interpreter, spec: primitives.SpecId) 
                 pc.inputs.gas_limit,
             );
             defer sub.deinit();
-            _ = sub.runWithHost(&table, host);
+            _ = sub.runWithHost(TestDB, &table, host);
             const rd: []const u8 = if (sub.result.isSuccess() or sub.result == .revert)
                 sub.return_data.data
             else
@@ -160,9 +163,9 @@ test "opCreate: stack underflow with fewer than 3 items" {
     interp.stack.pushUnsafe(0);
     interp.stack.pushUnsafe(0); // only 2 items
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
-    call_ops.opCreate(&ic);
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
+    ops.opCreate(&ic);
 
     try expect(!interp.bytecode.continue_execution);
     try expectEqual(.stack_underflow, interp.result);
@@ -181,9 +184,9 @@ test "opCreate: static context halts with invalid_static" {
     interp.stack.pushUnsafe(0); // offset
     interp.stack.pushUnsafe(0); // size
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
-    call_ops.opCreate(&ic);
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
+    ops.opCreate(&ic);
 
     try expect(!interp.bytecode.continue_execution);
     try expectEqual(.invalid_static, interp.result);
@@ -202,9 +205,9 @@ test "opCreate2: stack underflow with fewer than 4 items" {
     interp.stack.pushUnsafe(0);
     interp.stack.pushUnsafe(0);
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
-    call_ops.opCreate2(&ic);
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
+    ops.opCreate2(&ic);
 
     try expect(!interp.bytecode.continue_execution);
     try expectEqual(.stack_underflow, interp.result);
@@ -232,9 +235,9 @@ test "opCreate: STOP init code deploys empty contract, returns non-zero address"
     interp.stack.pushUnsafe(0); // offset
     interp.stack.pushUnsafe(INIT_CODE.len); // size
 
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
-    call_ops.opCreate(&ic);
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
+    ops.opCreate(&ic);
     runPendingCreate(&host, &interp, .prague);
 
     try expect(interp.bytecode.continue_execution); // parent keeps running
@@ -264,9 +267,9 @@ test "opCreate2: same inputs produce same address on stack" {
             interp.stack.pushUnsafe(0); // offset
             interp.stack.pushUnsafe(INIT_CODE.len); // size
 
-            var host = Host.fromCtx(&ctx, null);
-            var ic = InstructionContext{ .interpreter = &interp, .host = &host };
-            call_ops.opCreate2(&ic);
+            var host = host_module.fromCtx(&ctx, null);
+            var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
+            ops.opCreate2(&ic);
             runPendingCreate(&host, &interp, .prague);
             return interp.stack.popUnsafe();
         }
@@ -298,9 +301,9 @@ test "opCreate: collision at derived address returns 0" {
         interp.stack.pushUnsafe(0);
         interp.stack.pushUnsafe(0);
         interp.stack.pushUnsafe(INIT_CODE.len);
-        var host = Host.fromCtx(&ctx, null);
-        var ic = InstructionContext{ .interpreter = &interp, .host = &host };
-        call_ops.opCreate(&ic);
+        var host = host_module.fromCtx(&ctx, null);
+        var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
+        ops.opCreate(&ic);
         runPendingCreate(&host, &interp, .prague);
         const first_addr = interp.stack.popUnsafe();
         try expect(first_addr != 0);
@@ -322,9 +325,9 @@ test "opCreate: collision at derived address returns 0" {
         interp.stack.pushUnsafe(0);
         interp.stack.pushUnsafe(0);
         interp.stack.pushUnsafe(INIT_CODE.len);
-        var host = Host.fromCtx(&ctx, null);
-        var ic = InstructionContext{ .interpreter = &interp, .host = &host };
-        call_ops.opCreate(&ic);
+        var host = host_module.fromCtx(&ctx, null);
+        var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
+        ops.opCreate(&ic);
         const second_result = interp.stack.popUnsafe();
         try expectEqual(@as(U, 0), second_result);
     }

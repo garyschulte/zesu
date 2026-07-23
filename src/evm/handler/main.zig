@@ -216,16 +216,16 @@ pub fn EvmFor(comptime DB: type) type {
     return struct {
         ctx: *context.Context(DB),
         inspector: ?*Inspector,
-        instructions: *Instructions,
+        instructions: *Instructions(DB),
         precompiles: *Precompiles,
-        frame_stack: *FrameStack,
+        frame_stack: *FrameStack(DB),
 
         pub fn init(
             ctx: *context.Context(DB),
             inspector: ?*Inspector,
-            instructions: *Instructions,
+            instructions: *Instructions(DB),
             precompiles: *Precompiles,
-            frame_stack: *FrameStack,
+            frame_stack: *FrameStack(DB),
         ) @This() {
             return .{
                 .ctx = ctx,
@@ -240,11 +240,11 @@ pub fn EvmFor(comptime DB: type) type {
             return self.ctx;
         }
 
-        pub fn createFrame(self: *@This(), frame_data: FrameData) !Frame {
-            return Frame.init(frame_data, self.instructions, self.precompiles);
+        pub fn createFrame(self: *@This(), frame_data: FrameData) !Frame(DB) {
+            return Frame(DB).init(frame_data, self.instructions, self.precompiles);
         }
 
-        pub fn executeFrame(self: *@This(), frame: *Frame) !FrameResult {
+        pub fn executeFrame(self: *@This(), frame: *Frame(DB)) !FrameResult {
             return frame.execute(self.ctx);
         }
     };
@@ -253,102 +253,108 @@ pub fn EvmFor(comptime DB: type) type {
 /// Default EVM for InMemoryDB — drop-in for all existing zevm code.
 pub const Evm = EvmFor(database.InMemoryDB);
 
-/// Frame for execution
-pub const Frame = struct {
-    /// Frame data
-    data: FrameData,
-    /// Instructions
-    instructions: *Instructions,
-    /// Precompiles
-    precompiles: *Precompiles,
-    /// Interpreter
-    interpreter: interpreter.Interpreter,
+/// Frame for execution, comptime-generic over DB — see interpreter/host.zig's
+/// Host(DB) doc comment. Needed because Instructions(DB)'s dispatch table is
+/// DB-bound.
+pub fn Frame(comptime DB: type) type {
+    return struct {
+        /// Frame data
+        data: FrameData,
+        /// Instructions
+        instructions: *Instructions(DB),
+        /// Precompiles
+        precompiles: *Precompiles,
+        /// Interpreter
+        interpreter: interpreter.Interpreter,
 
-    /// Create new frame
-    pub fn init(data: FrameData, instructions: *Instructions, precompiles: *Precompiles) Frame {
-        // Extract spec from instructions provider (configured for this hardfork)
-        const spec = instructions.spec;
+        /// Create new frame
+        pub fn init(data: FrameData, instructions: *Instructions(DB), precompiles: *Precompiles) @This() {
+            // Extract spec from instructions provider (configured for this hardfork)
+            const spec = instructions.spec;
 
-        return Frame{
-            .data = data,
-            .instructions = instructions,
-            .precompiles = precompiles,
-            .interpreter = interpreter.Interpreter.new(
-                interpreter.Memory.new(),
-                interpreter.ExtBytecode.new(bytecode.Bytecode.new()),
-                interpreter.InputsImpl.new(
-                    data.caller,
-                    data.target,
-                    data.value,
-                    @constCast(data.input),
-                    data.gas_limit,
-                    data.scheme,
+            return .{
+                .data = data,
+                .instructions = instructions,
+                .precompiles = precompiles,
+                .interpreter = interpreter.Interpreter.new(
+                    interpreter.Memory.new(),
+                    interpreter.ExtBytecode.new(bytecode.Bytecode.new()),
+                    interpreter.InputsImpl.new(
+                        data.caller,
+                        data.target,
+                        data.value,
+                        @constCast(data.input),
+                        data.gas_limit,
+                        data.scheme,
+                        data.is_static,
+                        0,
+                    ),
                     data.is_static,
-                    0,
+                    spec, // Use spec from instructions instead of hardcoding
+                    data.gas_limit,
                 ),
-                data.is_static,
-                spec, // Use spec from instructions instead of hardcoding
-                data.gas_limit,
-            ),
-        };
-    }
+            };
+        }
 
-    /// Free resources owned by this frame (interpreter stack + memory).
-    pub fn deinit(self: *Frame) void {
-        self.interpreter.deinit();
-    }
+        /// Free resources owned by this frame (interpreter stack + memory).
+        pub fn deinit(self: *@This()) void {
+            self.interpreter.deinit();
+        }
 
-    /// Execute frame with host access for full EVM semantics.
-    pub fn execute(self: *Frame, ctx: anytype) !FrameResult {
-        const DB = @TypeOf(ctx.*).DatabaseType;
-        var host = interpreter.Host.init(DB, ctx, &self.precompiles.precompiles);
+        /// Execute frame with host access for full EVM semantics.
+        pub fn execute(self: *@This(), ctx: *context.Context(DB)) !FrameResult {
+            var host = interpreter.Host(DB).init(ctx, &self.precompiles.precompiles);
 
-        _ = self.interpreter.runWithHost(&self.instructions.table, &host);
+            _ = self.interpreter.runWithHost(DB, &self.instructions.table, &host);
 
-        const gas_used = self.interpreter.gas.getSpent();
-        const gas_refunded = self.interpreter.gas.refunded;
-        const state_gas_used = self.interpreter.gas.state_gas_used;
-        const status: ExecutionStatus = switch (self.interpreter.result) {
-            .stop, .@"return", .selfdestruct => .Success,
-            .revert => .Revert,
-            else => .Halt,
-        };
+            const gas_used = self.interpreter.gas.getSpent();
+            const gas_refunded = self.interpreter.gas.refunded;
+            const state_gas_used = self.interpreter.gas.state_gas_used;
+            const status: ExecutionStatus = switch (self.interpreter.result) {
+                .stop, .@"return", .selfdestruct => .Success,
+                .revert => .Revert,
+                else => .Halt,
+            };
 
-        var exec_result = ExecutionResult.new(status, gas_used);
-        exec_result.state_gas_used = state_gas_used;
-        return FrameResult.new(
-            exec_result,
-            self.interpreter.gas.remaining,
-            gas_refunded,
-        );
-    }
-};
+            var exec_result = ExecutionResult.new(status, gas_used);
+            exec_result.state_gas_used = state_gas_used;
+            return FrameResult.new(
+                exec_result,
+                self.interpreter.gas.remaining,
+                gas_refunded,
+            );
+        }
+    };
+}
 
-/// Instructions provider for EVM execution
-pub const Instructions = struct {
-    /// Instruction table for the configured spec
-    table: interpreter.protocol_schedule.InstructionTable,
-    /// Hardfork specification
-    spec: primitives.SpecId,
+/// Instructions provider for EVM execution, comptime-generic over DB — its
+/// dispatch table is DB-bound (see interpreter/host.zig's Host(DB) doc comment).
+pub fn Instructions(comptime DB: type) type {
+    return struct {
+        /// Instruction table for the configured spec
+        table: interpreter.protocol_schedule.InstructionTable(DB),
+        /// Hardfork specification
+        spec: primitives.SpecId,
 
-    /// Create instructions provider for a specific hardfork spec
-    pub fn new(spec: primitives.SpecId) Instructions {
-        return Instructions{
-            .table = interpreter.protocol_schedule.makeInstructionTable(spec),
-            .spec = spec,
-        };
-    }
+        /// Create instructions provider for a specific hardfork spec
+        pub fn new(spec: primitives.SpecId) @This() {
+            return .{
+                .table = interpreter.protocol_schedule.makeInstructionTable(DB, spec),
+                .spec = spec,
+            };
+        }
 
-    /// Get instruction entry for an opcode
-    pub fn getInstruction(self: *const Instructions, opcode: u8) interpreter.protocol_schedule.InstructionEntry {
-        return self.table[opcode];
-    }
+        /// Get instruction entry for an opcode
+        pub fn getInstruction(self: *const @This(), opcode: u8) interpreter.protocol_schedule.InstructionEntry(DB) {
+            return self.table[opcode];
+        }
 
-    /// Get static gas cost for an opcode
-    pub fn getStaticGas(self: *const Instructions, opcode: u8) u64 {
-        return self.table[opcode].static_gas;
-    }
-};
+        /// Get static gas cost for an opcode
+        pub fn getStaticGas(self: *const @This(), opcode: u8) u64 {
+            return self.table[opcode].static_gas;
+        }
+    };
+}
 
 /// Precompiles implementation
 pub const Precompiles = struct {
@@ -373,50 +379,52 @@ pub const Precompiles = struct {
     }
 };
 
-/// Frame stack
-pub const FrameStack = struct {
-    /// Stack of frames
-    frames: std.ArrayList(Frame),
+/// Frame stack, comptime-generic over DB since it holds Frame(DB) values.
+pub fn FrameStack(comptime DB: type) type {
+    return struct {
+        /// Stack of frames
+        frames: std.ArrayList(Frame(DB)),
 
-    /// Create new frame stack
-    pub fn new() FrameStack {
-        return FrameStack{
-            .frames = std.ArrayList(Frame){ .items = &[_]Frame{}, .capacity = 0 },
-        };
-    }
-
-    /// Create new frame stack with preallocated capacity
-    pub fn newPrealloc(capacity: usize) FrameStack {
-        var stack = FrameStack.new();
-        stack.frames.ensureTotalCapacity(alloc_mod.get(), capacity) catch {};
-        return stack;
-    }
-
-    /// Push frame
-    pub fn push(self: *FrameStack, frame: Frame) !void {
-        try self.frames.append(alloc_mod.get(), frame);
-    }
-
-    /// Pop frame
-    pub fn pop(self: *FrameStack) ?Frame {
-        if (self.frames.items.len == 0) {
-            return null;
+        /// Create new frame stack
+        pub fn new() @This() {
+            return .{
+                .frames = std.ArrayList(Frame(DB)){ .items = &[_]Frame(DB){}, .capacity = 0 },
+            };
         }
-        return self.frames.pop();
-    }
 
-    /// Get frame count
-    pub fn len(self: *FrameStack) usize {
-        return self.frames.items.len;
-    }
+        /// Create new frame stack with preallocated capacity
+        pub fn newPrealloc(capacity: usize) @This() {
+            var stack = @This().new();
+            stack.frames.ensureTotalCapacity(alloc_mod.get(), capacity) catch {};
+            return stack;
+        }
 
-    /// Deinitialize frame stack
-    pub fn deinit(self: *FrameStack) void {
-        // ArrayList deinit requires allocator in Zig 0.15.1
-        // For now, just clear the items
-        self.frames.items = &[_]Frame{};
-    }
-};
+        /// Push frame
+        pub fn push(self: *@This(), frame: Frame(DB)) !void {
+            try self.frames.append(alloc_mod.get(), frame);
+        }
+
+        /// Pop frame
+        pub fn pop(self: *@This()) ?Frame(DB) {
+            if (self.frames.items.len == 0) {
+                return null;
+            }
+            return self.frames.pop();
+        }
+
+        /// Get frame count
+        pub fn len(self: *@This()) usize {
+            return self.frames.items.len;
+        }
+
+        /// Deinitialize frame stack
+        pub fn deinit(self: *@This()) void {
+            // ArrayList deinit requires allocator in Zig 0.15.1
+            // For now, just clear the items
+            self.frames.items = &[_]Frame(DB){};
+        }
+    };
+}
 
 /// Inspector for execution monitoring
 pub const Inspector = struct {
@@ -493,7 +501,7 @@ pub const testing = struct {
     }
 
     fn testFrameStack() !void {
-        var stack = FrameStack.new();
+        var stack = FrameStack(database.InMemoryDB).new();
         defer stack.deinit();
 
         std.debug.assert(stack.len() == 0);
@@ -508,9 +516,9 @@ pub const testing = struct {
             .call,
         );
 
-        var instructions = Instructions.new(primitives.SpecId.prague);
+        var instructions = Instructions(database.InMemoryDB).new(primitives.SpecId.prague);
         var precompiles = Precompiles.new(primitives.SpecId.prague);
-        const frame = Frame.init(frame_data, &instructions, &precompiles);
+        const frame = Frame(database.InMemoryDB).init(frame_data, &instructions, &precompiles);
         try stack.push(frame);
 
         std.debug.assert(stack.len() == 1);

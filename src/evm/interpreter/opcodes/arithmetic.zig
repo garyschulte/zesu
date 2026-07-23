@@ -3,173 +3,180 @@ const primitives = @import("primitives");
 const InstructionContext = @import("../instruction_context.zig").InstructionContext;
 const gas_costs = @import("../gas_costs.zig");
 
-/// ADD opcode (0x01): a + b (wrapping mod 2^256)
-/// Stack: [a, b] -> [a + b]   Static gas: 3 (VERYLOW, charged by dispatch)
-pub fn opAdd(ctx: *InstructionContext) void {
-    const stack = &ctx.interpreter.stack;
-    if (!stack.hasItems(2)) {
-        ctx.interpreter.halt(.stack_underflow);
-        return;
-    }
-    const a = stack.peekUnsafe(0);
-    const b = stack.peekUnsafe(1);
-    stack.shrinkUnsafe(1);
-    stack.setTopUnsafe().* = a +% b;
-}
+/// Arithmetic opcode handlers, comptime-generic over DB — see host.zig's
+/// Host(DB) doc comment. None of these touch Host; they live here only
+/// because they're entries in the same DB-bound dispatch table.
+pub fn Ops(comptime DB: type) type {
+    return struct {
+        /// ADD opcode (0x01): a + b (wrapping mod 2^256)
+        /// Stack: [a, b] -> [a + b]   Static gas: 3 (VERYLOW, charged by dispatch)
+        pub fn opAdd(ctx: *InstructionContext(DB)) void {
+            const stack = &ctx.interpreter.stack;
+            if (!stack.hasItems(2)) {
+                ctx.interpreter.halt(.stack_underflow);
+                return;
+            }
+            const a = stack.peekUnsafe(0);
+            const b = stack.peekUnsafe(1);
+            stack.shrinkUnsafe(1);
+            stack.setTopUnsafe().* = a +% b;
+        }
 
-/// SUB opcode (0x03): a - b (wrapping mod 2^256)
-/// Stack: [a, b] -> [a - b]   Static gas: 3 (VERYLOW)
-pub fn opSub(ctx: *InstructionContext) void {
-    const stack = &ctx.interpreter.stack;
-    if (!stack.hasItems(2)) {
-        ctx.interpreter.halt(.stack_underflow);
-        return;
-    }
-    const a = stack.peekUnsafe(0);
-    const b = stack.peekUnsafe(1);
-    stack.shrinkUnsafe(1);
-    stack.setTopUnsafe().* = a -% b;
-}
+        /// SUB opcode (0x03): a - b (wrapping mod 2^256)
+        /// Stack: [a, b] -> [a - b]   Static gas: 3 (VERYLOW)
+        pub fn opSub(ctx: *InstructionContext(DB)) void {
+            const stack = &ctx.interpreter.stack;
+            if (!stack.hasItems(2)) {
+                ctx.interpreter.halt(.stack_underflow);
+                return;
+            }
+            const a = stack.peekUnsafe(0);
+            const b = stack.peekUnsafe(1);
+            stack.shrinkUnsafe(1);
+            stack.setTopUnsafe().* = a -% b;
+        }
 
-/// MUL opcode (0x02): a * b (wrapping mod 2^256)
-/// Stack: [a, b] -> [a * b]   Static gas: 5 (LOW)
-pub fn opMul(ctx: *InstructionContext) void {
-    const stack = &ctx.interpreter.stack;
-    if (!stack.hasItems(2)) {
-        ctx.interpreter.halt(.stack_underflow);
-        return;
-    }
-    const a = stack.peekUnsafe(0);
-    const b = stack.peekUnsafe(1);
-    stack.shrinkUnsafe(1);
-    stack.setTopUnsafe().* = a *% b;
-}
+        /// MUL opcode (0x02): a * b (wrapping mod 2^256)
+        /// Stack: [a, b] -> [a * b]   Static gas: 5 (LOW)
+        pub fn opMul(ctx: *InstructionContext(DB)) void {
+            const stack = &ctx.interpreter.stack;
+            if (!stack.hasItems(2)) {
+                ctx.interpreter.halt(.stack_underflow);
+                return;
+            }
+            const a = stack.peekUnsafe(0);
+            const b = stack.peekUnsafe(1);
+            stack.shrinkUnsafe(1);
+            stack.setTopUnsafe().* = a *% b;
+        }
 
-/// DIV opcode (0x04): a / b (unsigned, division by zero returns 0)
-/// Stack: [a, b] -> [a / b]   Static gas: 5 (LOW)
-pub fn opDiv(ctx: *InstructionContext) void {
-    const stack = &ctx.interpreter.stack;
-    if (!stack.hasItems(2)) {
-        ctx.interpreter.halt(.stack_underflow);
-        return;
-    }
-    const a = stack.peekUnsafe(0);
-    const b = stack.peekUnsafe(1);
-    stack.shrinkUnsafe(1);
-    stack.setTopUnsafe().* = if (b == 0) 0 else fromLimbs(limbDivMod(toLimbs(a), toLimbs(b)).q);
-}
+        /// DIV opcode (0x04): a / b (unsigned, division by zero returns 0)
+        /// Stack: [a, b] -> [a / b]   Static gas: 5 (LOW)
+        pub fn opDiv(ctx: *InstructionContext(DB)) void {
+            const stack = &ctx.interpreter.stack;
+            if (!stack.hasItems(2)) {
+                ctx.interpreter.halt(.stack_underflow);
+                return;
+            }
+            const a = stack.peekUnsafe(0);
+            const b = stack.peekUnsafe(1);
+            stack.shrinkUnsafe(1);
+            stack.setTopUnsafe().* = if (b == 0) 0 else fromLimbs(limbDivMod(toLimbs(a), toLimbs(b)).q);
+        }
 
-/// SDIV opcode (0x05): a / b (signed, division by zero returns 0)
-/// Stack: [a, b] -> [a / b]   Static gas: 5 (LOW)
-pub fn opSdiv(ctx: *InstructionContext) void {
-    const stack = &ctx.interpreter.stack;
-    if (!stack.hasItems(2)) {
-        ctx.interpreter.halt(.stack_underflow);
-        return;
-    }
-    const a = stack.peekUnsafe(0);
-    const b = stack.peekUnsafe(1);
-    stack.shrinkUnsafe(1);
-    stack.setTopUnsafe().* = sdiv(a, b);
-}
+        /// SDIV opcode (0x05): a / b (signed, division by zero returns 0)
+        /// Stack: [a, b] -> [a / b]   Static gas: 5 (LOW)
+        pub fn opSdiv(ctx: *InstructionContext(DB)) void {
+            const stack = &ctx.interpreter.stack;
+            if (!stack.hasItems(2)) {
+                ctx.interpreter.halt(.stack_underflow);
+                return;
+            }
+            const a = stack.peekUnsafe(0);
+            const b = stack.peekUnsafe(1);
+            stack.shrinkUnsafe(1);
+            stack.setTopUnsafe().* = sdiv(a, b);
+        }
 
-/// MOD opcode (0x06): a % b (unsigned, mod by zero returns 0)
-/// Stack: [a, b] -> [a % b]   Static gas: 5 (LOW)
-pub fn opMod(ctx: *InstructionContext) void {
-    const stack = &ctx.interpreter.stack;
-    if (!stack.hasItems(2)) {
-        ctx.interpreter.halt(.stack_underflow);
-        return;
-    }
-    const a = stack.peekUnsafe(0);
-    const b = stack.peekUnsafe(1);
-    stack.shrinkUnsafe(1);
-    stack.setTopUnsafe().* = if (b == 0) 0 else fromLimbs(limbDivMod(toLimbs(a), toLimbs(b)).r);
-}
+        /// MOD opcode (0x06): a % b (unsigned, mod by zero returns 0)
+        /// Stack: [a, b] -> [a % b]   Static gas: 5 (LOW)
+        pub fn opMod(ctx: *InstructionContext(DB)) void {
+            const stack = &ctx.interpreter.stack;
+            if (!stack.hasItems(2)) {
+                ctx.interpreter.halt(.stack_underflow);
+                return;
+            }
+            const a = stack.peekUnsafe(0);
+            const b = stack.peekUnsafe(1);
+            stack.shrinkUnsafe(1);
+            stack.setTopUnsafe().* = if (b == 0) 0 else fromLimbs(limbDivMod(toLimbs(a), toLimbs(b)).r);
+        }
 
-/// SMOD opcode (0x07): a % b (signed, mod by zero returns 0)
-/// Stack: [a, b] -> [a % b]   Static gas: 5 (LOW)
-pub fn opSmod(ctx: *InstructionContext) void {
-    const stack = &ctx.interpreter.stack;
-    if (!stack.hasItems(2)) {
-        ctx.interpreter.halt(.stack_underflow);
-        return;
-    }
-    const a = stack.peekUnsafe(0);
-    const b = stack.peekUnsafe(1);
-    stack.shrinkUnsafe(1);
-    stack.setTopUnsafe().* = smod(a, b);
-}
+        /// SMOD opcode (0x07): a % b (signed, mod by zero returns 0)
+        /// Stack: [a, b] -> [a % b]   Static gas: 5 (LOW)
+        pub fn opSmod(ctx: *InstructionContext(DB)) void {
+            const stack = &ctx.interpreter.stack;
+            if (!stack.hasItems(2)) {
+                ctx.interpreter.halt(.stack_underflow);
+                return;
+            }
+            const a = stack.peekUnsafe(0);
+            const b = stack.peekUnsafe(1);
+            stack.shrinkUnsafe(1);
+            stack.setTopUnsafe().* = smod(a, b);
+        }
 
-/// ADDMOD opcode (0x08): (a + b) % N with u257 intermediate
-/// Stack: [a, b, N] -> [(a + b) % N]   Static gas: 8 (MID)
-pub fn opAddmod(ctx: *InstructionContext) void {
-    const stack = &ctx.interpreter.stack;
-    if (!stack.hasItems(3)) {
-        ctx.interpreter.halt(.stack_underflow);
-        return;
-    }
-    const a = stack.peekUnsafe(0);
-    const b = stack.peekUnsafe(1);
-    const n = stack.peekUnsafe(2);
-    stack.shrinkUnsafe(2);
-    stack.setTopUnsafe().* = addmod(a, b, n);
-}
+        /// ADDMOD opcode (0x08): (a + b) % N with u257 intermediate
+        /// Stack: [a, b, N] -> [(a + b) % N]   Static gas: 8 (MID)
+        pub fn opAddmod(ctx: *InstructionContext(DB)) void {
+            const stack = &ctx.interpreter.stack;
+            if (!stack.hasItems(3)) {
+                ctx.interpreter.halt(.stack_underflow);
+                return;
+            }
+            const a = stack.peekUnsafe(0);
+            const b = stack.peekUnsafe(1);
+            const n = stack.peekUnsafe(2);
+            stack.shrinkUnsafe(2);
+            stack.setTopUnsafe().* = addmod(a, b, n);
+        }
 
-/// MULMOD opcode (0x09): (a * b) % N with u512 intermediate
-/// Stack: [a, b, N] -> [(a * b) % N]   Static gas: 8 (MID)
-pub fn opMulmod(ctx: *InstructionContext) void {
-    const stack = &ctx.interpreter.stack;
-    if (!stack.hasItems(3)) {
-        ctx.interpreter.halt(.stack_underflow);
-        return;
-    }
-    const a = stack.peekUnsafe(0);
-    const b = stack.peekUnsafe(1);
-    const n = stack.peekUnsafe(2);
-    stack.shrinkUnsafe(2);
-    stack.setTopUnsafe().* = mulmod(a, b, n);
-}
+        /// MULMOD opcode (0x09): (a * b) % N with u512 intermediate
+        /// Stack: [a, b, N] -> [(a * b) % N]   Static gas: 8 (MID)
+        pub fn opMulmod(ctx: *InstructionContext(DB)) void {
+            const stack = &ctx.interpreter.stack;
+            if (!stack.hasItems(3)) {
+                ctx.interpreter.halt(.stack_underflow);
+                return;
+            }
+            const a = stack.peekUnsafe(0);
+            const b = stack.peekUnsafe(1);
+            const n = stack.peekUnsafe(2);
+            stack.shrinkUnsafe(2);
+            stack.setTopUnsafe().* = mulmod(a, b, n);
+        }
 
-/// EXP opcode (0x0A): base ^ exponent (mod 2^256)
-/// Stack: [base, exponent] -> [base ^ exponent]
-/// Static gas: 10 (G_EXP, charged by dispatch) + dynamic: G_EXPBYTE * byteSize(exponent)
-/// EIP-160 (Spurious Dragon): G_EXPBYTE raised from 10 to 50.
-pub fn opExp(ctx: *InstructionContext) void {
-    const stack = &ctx.interpreter.stack;
-    if (!stack.hasItems(2)) {
-        ctx.interpreter.halt(.stack_underflow);
-        return;
-    }
-    const exponent = stack.peekUnsafe(1);
-    // Dynamic gas: G_EXPBYTE per byte of exponent (10 pre-Spurious Dragon, 50 post)
-    const spec = ctx.interpreter.runtime_flags.spec_id;
-    const expbyte_cost: u64 = if (primitives.isEnabledIn(spec, .spurious_dragon))
-        gas_costs.G_EXPBYTE
-    else
-        gas_costs.G_EXPBYTE_FRONTIER;
-    const dynamic_gas = expbyte_cost * byteSize(exponent);
-    if (!ctx.interpreter.gas.spend(dynamic_gas)) {
-        ctx.interpreter.halt(.out_of_gas);
-        return;
-    }
-    const base = stack.peekUnsafe(0);
-    stack.shrinkUnsafe(1);
-    stack.setTopUnsafe().* = expMod256(base, exponent);
-}
+        /// EXP opcode (0x0A): base ^ exponent (mod 2^256)
+        /// Stack: [base, exponent] -> [base ^ exponent]
+        /// Static gas: 10 (G_EXP, charged by dispatch) + dynamic: G_EXPBYTE * byteSize(exponent)
+        /// EIP-160 (Spurious Dragon): G_EXPBYTE raised from 10 to 50.
+        pub fn opExp(ctx: *InstructionContext(DB)) void {
+            const stack = &ctx.interpreter.stack;
+            if (!stack.hasItems(2)) {
+                ctx.interpreter.halt(.stack_underflow);
+                return;
+            }
+            const exponent = stack.peekUnsafe(1);
+            // Dynamic gas: G_EXPBYTE per byte of exponent (10 pre-Spurious Dragon, 50 post)
+            const spec = ctx.interpreter.runtime_flags.spec_id;
+            const expbyte_cost: u64 = if (primitives.isEnabledIn(spec, .spurious_dragon))
+                gas_costs.G_EXPBYTE
+            else
+                gas_costs.G_EXPBYTE_FRONTIER;
+            const dynamic_gas = expbyte_cost * byteSize(exponent);
+            if (!ctx.interpreter.gas.spend(dynamic_gas)) {
+                ctx.interpreter.halt(.out_of_gas);
+                return;
+            }
+            const base = stack.peekUnsafe(0);
+            stack.shrinkUnsafe(1);
+            stack.setTopUnsafe().* = expMod256(base, exponent);
+        }
 
-/// SIGNEXTEND opcode (0x0B): Sign extend value from byte position
-/// Stack: [byte_pos, value] -> [extended_value]   Static gas: 5 (LOW)
-pub fn opSignextend(ctx: *InstructionContext) void {
-    const stack = &ctx.interpreter.stack;
-    if (!stack.hasItems(2)) {
-        ctx.interpreter.halt(.stack_underflow);
-        return;
-    }
-    const byte_pos = stack.peekUnsafe(0);
-    const value = stack.peekUnsafe(1);
-    stack.shrinkUnsafe(1);
-    stack.setTopUnsafe().* = signextend(byte_pos, value);
+        /// SIGNEXTEND opcode (0x0B): Sign extend value from byte position
+        /// Stack: [byte_pos, value] -> [extended_value]   Static gas: 5 (LOW)
+        pub fn opSignextend(ctx: *InstructionContext(DB)) void {
+            const stack = &ctx.interpreter.stack;
+            if (!stack.hasItems(2)) {
+                ctx.interpreter.halt(.stack_underflow);
+                return;
+            }
+            const byte_pos = stack.peekUnsafe(0);
+            const value = stack.peekUnsafe(1);
+            stack.shrinkUnsafe(1);
+            stack.setTopUnsafe().* = signextend(byte_pos, value);
+        }
+    };
 }
 
 // --- Helpers ---

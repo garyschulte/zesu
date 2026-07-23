@@ -607,7 +607,8 @@ pub fn transitionWithContext(
     reward: i64,
     public_keys: []const []const u8,
 ) !TransitionResult {
-    var instructions = handler_mod.Instructions.new(spec);
+    const DB = @TypeOf(ctx.*).DatabaseType;
+    var instructions = handler_mod.Instructions(DB).new(spec);
     var precompiles = handler_mod.Precompiles.new(spec);
 
     // EIP-2929: precompiles are always warm — set once per block, persists across commitTx/discardTx.
@@ -1003,7 +1004,7 @@ pub fn transitionWithContext(
 
             // Intrinsic gas check: call validateInitialTxGas via a temporary EVM instance.
             // ctx.tx is fully populated at this point (kind, data, access_list, etc.).
-            var frame_stack_pre = handler_mod.FrameStack.new();
+            var frame_stack_pre = handler_mod.FrameStack(DB).new();
             var evm_pre = handler_mod.EvmFor(@TypeOf(ctx.*).DatabaseType).init(ctx, null, &instructions, &precompiles, &frame_stack_pre);
             _ = handler_mod.Validation.validateInitialTxGas(&evm_pre) catch |err| {
                 ctx.journaled_state.discardTx();
@@ -1058,7 +1059,7 @@ pub fn transitionWithContext(
         }
 
         // 4. Execute
-        var frame_stack = handler_mod.FrameStack.new();
+        var frame_stack = handler_mod.FrameStack(DB).new();
         var evm = handler_mod.EvmFor(@TypeOf(ctx.*).DatabaseType).init(ctx, null, &instructions, &precompiles, &frame_stack);
 
         var exec_result = handler_mod.ExecuteEvm.execute(&evm) catch |err| {

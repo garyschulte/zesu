@@ -288,21 +288,29 @@ pub const ExtBytecode = struct {
 pub const InstructionFn = @import("instruction_context.zig").InstructionFn;
 
 /// One entry in the dispatch table: a handler function and its static gas cost.
-pub const InstructionEntry = struct {
-    func: InstructionFn,
-    static_gas: u64,
+pub fn InstructionEntry(comptime DB: type) type {
+    return struct {
+        func: InstructionFn(DB),
+        static_gas: u64,
 
-    pub fn unknown() InstructionEntry {
-        return .{ .func = opUnknown, .static_gas = 0 };
-    }
-};
+        pub fn unknown() @This() {
+            return .{ .func = opUnknown(DB), .static_gas = 0 };
+        }
+    };
+}
 
 /// 256-entry dispatch table indexed by opcode byte.
-pub const InstructionTable = [256]InstructionEntry;
+pub fn InstructionTable(comptime DB: type) type {
+    return [256]InstructionEntry(DB);
+}
 
 /// Handler for unknown/disabled opcodes.
-fn opUnknown(ctx: *InstructionContext) void {
-    ctx.interpreter.halt(.invalid_opcode);
+fn opUnknown(comptime DB: type) InstructionFn(DB) {
+    return struct {
+        fn f(ctx: *InstructionContext(DB)) void {
+            ctx.interpreter.halt(.invalid_opcode);
+        }
+    }.f;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +457,7 @@ pub const Interpreter = struct {
     // -----------------------------------------------------------------------
 
     /// Execute one opcode: read opcode at PC, advance PC, charge static gas, call handler.
-    pub fn step(self: *Interpreter, table: *const InstructionTable) void {
+    pub fn step(self: *Interpreter, comptime DB: type, table: *const InstructionTable(DB)) void {
         const op = self.bytecode.opcode();
         self.bytecode.relativeJump(1);
         const ins = table[op];
@@ -457,19 +465,19 @@ pub const Interpreter = struct {
             self.halt(.out_of_gas);
             return;
         }
-        var ctx = InstructionContext{ .interpreter = self };
+        var ctx = InstructionContext(DB){ .interpreter = self };
         ins.func(&ctx);
     }
 
     /// Run the interpreter until execution halts (no host).
-    pub fn run(self: *Interpreter, table: *const InstructionTable) InstructionResult {
-        var ctx = InstructionContext{ .interpreter = self };
-        runDispatch(self, table, &ctx, false);
+    pub fn run(self: *Interpreter, comptime DB: type, table: *const InstructionTable(DB)) InstructionResult {
+        var ctx = InstructionContext(DB){ .interpreter = self };
+        runDispatch(DB, self, table, &ctx, false);
         return self.result;
     }
 
     /// Execute one opcode with a host for state access.
-    pub fn stepWithHost(self: *Interpreter, table: *const InstructionTable, host: *Host) void {
+    pub fn stepWithHost(self: *Interpreter, comptime DB: type, table: *const InstructionTable(DB), host: *Host(DB)) void {
         const op = self.bytecode.opcode();
         self.bytecode.relativeJump(1);
         const ins = table[op];
@@ -477,14 +485,14 @@ pub const Interpreter = struct {
             self.halt(.out_of_gas);
             return;
         }
-        var ctx = InstructionContext{ .interpreter = self, .host = host };
+        var ctx = InstructionContext(DB){ .interpreter = self, .host = host };
         ins.func(&ctx);
     }
 
     /// Run the interpreter until execution halts or a sub-call is pending, with full host access.
-    pub fn runWithHost(self: *Interpreter, table: *const InstructionTable, host: *Host) InstructionResult {
-        var ctx = InstructionContext{ .interpreter = self, .host = host };
-        runDispatch(self, table, &ctx, true);
+    pub fn runWithHost(self: *Interpreter, comptime DB: type, table: *const InstructionTable(DB), host: *Host(DB)) InstructionResult {
+        var ctx = InstructionContext(DB){ .interpreter = self, .host = host };
+        runDispatch(DB, self, table, &ctx, true);
         return self.result;
     }
 
@@ -526,16 +534,18 @@ pub const Interpreter = struct {
 // per-fork handler.
 
 fn runDispatch(
+    comptime DB: type,
     self: *Interpreter,
-    table: *const InstructionTable,
-    ctx: *InstructionContext,
+    table: *const InstructionTable(DB),
+    ctx: *InstructionContext(DB),
     comptime check_pending: bool,
 ) void {
+    const ops = opcodes.Ops(DB);
     if (!self.bytecode.isNotEnd()) return;
     sw: switch (self.bytecode.opcode()) {
         0x00 => { // STOP
             self.bytecode.relativeJump(1);
-            opcodes.opStop(ctx);
+            ops.opStop(ctx);
         },
         0x01 => { // ADD
             self.bytecode.relativeJump(1);
@@ -543,7 +553,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opAdd(ctx);
+            ops.opAdd(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -553,7 +563,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opMul(ctx);
+            ops.opMul(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -563,7 +573,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opSub(ctx);
+            ops.opSub(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -573,7 +583,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opLt(ctx);
+            ops.opLt(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -583,7 +593,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opGt(ctx);
+            ops.opGt(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -593,7 +603,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opEq(ctx);
+            ops.opEq(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -603,7 +613,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opIsZero(ctx);
+            ops.opIsZero(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -613,7 +623,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opAnd(ctx);
+            ops.opAnd(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -623,7 +633,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opOr(ctx);
+            ops.opOr(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -633,7 +643,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opXor(ctx);
+            ops.opXor(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -643,7 +653,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opNot(ctx);
+            ops.opNot(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -653,7 +663,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opPop(ctx);
+            ops.opPop(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -663,7 +673,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opJump(ctx);
+            ops.opJump(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -673,7 +683,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opJumpi(ctx);
+            ops.opJumpi(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -683,7 +693,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opJumpdest(ctx);
+            ops.opJumpdest(ctx);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -695,7 +705,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opPushNImpl(ctx, n);
+            ops.opPushNImpl(ctx, n);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -707,7 +717,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opDupNImpl(ctx, n);
+            ops.opDupNImpl(ctx, n);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },
@@ -719,7 +729,7 @@ fn runDispatch(
                 self.halt(.out_of_gas);
                 return;
             }
-            opcodes.opSwapNImpl(ctx, n);
+            ops.opSwapNImpl(ctx, n);
             if (self.bytecode.isNotEnd() and (!check_pending or self.pending == .none))
                 continue :sw self.bytecode.opcode();
         },

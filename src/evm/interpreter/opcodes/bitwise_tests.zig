@@ -1,17 +1,21 @@
 const std = @import("std");
 const primitives = @import("primitives");
+const database = @import("database");
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const InstructionContext = @import("../instruction_context.zig").InstructionContext;
 const bitwise = @import("bitwise.zig");
 
-const opAnd = bitwise.opAnd;
-const opOr = bitwise.opOr;
-const opXor = bitwise.opXor;
-const opNot = bitwise.opNot;
-const opByte = bitwise.opByte;
-const opShl = bitwise.opShl;
-const opShr = bitwise.opShr;
-const opSar = bitwise.opSar;
+/// No host needed in these tests — bind the dispatch table to any concrete DB.
+const TestDB = database.InMemoryDB;
+const ops = bitwise.Ops(TestDB);
+const opAnd = ops.opAnd;
+const opOr = ops.opOr;
+const opXor = ops.opXor;
+const opNot = ops.opNot;
+const opByte = ops.opByte;
+const opShl = ops.opShl;
+const opShr = ops.opShr;
+const opSar = ops.opSar;
 
 const expectEqual = std.testing.expectEqual;
 const expect = std.testing.expect;
@@ -24,7 +28,7 @@ test "AND: basic" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0xFF));
     interp.stack.pushUnsafe(@as(U, 0x0F));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opAnd(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 0x0F), interp.stack.popUnsafe());
@@ -34,7 +38,7 @@ test "AND: identity with MAX" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 42));
     interp.stack.pushUnsafe(MAX);
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opAnd(&ctx);
     try expectEqual(@as(U, 42), interp.stack.popUnsafe());
 }
@@ -43,14 +47,14 @@ test "AND: zero annihilator" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 12345));
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opAnd(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
 
 test "AND: stack underflow" {
     var interp = Interpreter.defaultExt();
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opAnd(&ctx);
     try expectEqual(.stack_underflow, interp.result);
 }
@@ -61,7 +65,7 @@ test "OR: basic" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0xF0));
     interp.stack.pushUnsafe(@as(U, 0x0F));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opOr(&ctx);
     try expectEqual(@as(U, 0xFF), interp.stack.popUnsafe());
 }
@@ -70,7 +74,7 @@ test "OR: identity with zero" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 42));
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opOr(&ctx);
     try expectEqual(@as(U, 42), interp.stack.popUnsafe());
 }
@@ -81,7 +85,7 @@ test "XOR: basic" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0xFF));
     interp.stack.pushUnsafe(@as(U, 0x0F));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opXor(&ctx);
     try expectEqual(@as(U, 0xF0), interp.stack.popUnsafe());
 }
@@ -90,7 +94,7 @@ test "XOR: self = 0" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 12345));
     interp.stack.pushUnsafe(@as(U, 12345));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opXor(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -100,7 +104,7 @@ test "XOR: self = 0" {
 test "NOT: ~0 = MAX" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opNot(&ctx);
     try expectEqual(MAX, interp.stack.popUnsafe());
 }
@@ -108,7 +112,7 @@ test "NOT: ~0 = MAX" {
 test "NOT: ~MAX = 0" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(MAX);
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opNot(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -116,7 +120,7 @@ test "NOT: ~MAX = 0" {
 test "NOT: double negation" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0xDEADBEEF));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opNot(&ctx);
     opNot(&ctx);
     try expectEqual(@as(U, 0xDEADBEEF), interp.stack.popUnsafe());
@@ -128,7 +132,7 @@ test "BYTE: extract byte 31 (least significant)" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0xABCDEF));
     interp.stack.pushUnsafe(@as(U, 31));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opByte(&ctx);
     try expectEqual(@as(U, 0xEF), interp.stack.popUnsafe());
 }
@@ -137,7 +141,7 @@ test "BYTE: index >= 32 returns 0" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0xDEAD));
     interp.stack.pushUnsafe(@as(U, 32));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opByte(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -148,7 +152,7 @@ test "BYTE: index 0 extracts most significant byte" {
     const value: U = @as(U, 0xAB) << 248;
     interp.stack.pushUnsafe(value);
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opByte(&ctx);
     try expectEqual(@as(U, 0xAB), interp.stack.popUnsafe());
 }
@@ -159,7 +163,7 @@ test "SHL: 1 << 4 = 16" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 1));
     interp.stack.pushUnsafe(@as(U, 4));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opShl(&ctx);
     try expectEqual(@as(U, 16), interp.stack.popUnsafe());
 }
@@ -168,7 +172,7 @@ test "SHL: shift >= 256 = 0" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0xDEAD));
     interp.stack.pushUnsafe(@as(U, 256));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opShl(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -179,7 +183,7 @@ test "SHR: 16 >> 4 = 1" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 16));
     interp.stack.pushUnsafe(@as(U, 4));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opShr(&ctx);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
 }
@@ -188,7 +192,7 @@ test "SHR: shift >= 256 = 0" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(MAX);
     interp.stack.pushUnsafe(@as(U, 256));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opShr(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -199,7 +203,7 @@ test "SAR: positive value right shift" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0x100));
     interp.stack.pushUnsafe(@as(U, 4));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opSar(&ctx);
     try expectEqual(@as(U, 0x10), interp.stack.popUnsafe());
 }
@@ -209,7 +213,7 @@ test "SAR: negative value preserves sign (arithmetic)" {
     // MAX = all 1s (negative in two's complement)
     interp.stack.pushUnsafe(MAX);
     interp.stack.pushUnsafe(@as(U, 4));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opSar(&ctx);
     // Arithmetic shift right of -1 by 4 = -1 (all 1s)
     try expectEqual(MAX, interp.stack.popUnsafe());
@@ -219,7 +223,7 @@ test "SAR: shift >= 256 negative = MAX" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(MAX); // negative
     interp.stack.pushUnsafe(@as(U, 256));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opSar(&ctx);
     try expectEqual(MAX, interp.stack.popUnsafe());
 }
@@ -228,7 +232,7 @@ test "SAR: shift >= 256 positive = 0" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 1)); // positive
     interp.stack.pushUnsafe(@as(U, 256));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opSar(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }

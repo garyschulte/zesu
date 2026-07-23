@@ -5,10 +5,12 @@ const context_mod = @import("context");
 
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const InstructionContext = @import("../instruction_context.zig").InstructionContext;
-const Host = @import("../host.zig").Host;
 const host_module = @import("../host.zig");
 
 const environment = @import("environment.zig");
+
+const TestDB = database_mod.InMemoryDB;
+const ops = environment.Ops(TestDB);
 
 const expectEqual = std.testing.expectEqual;
 const expect = std.testing.expect;
@@ -38,9 +40,9 @@ fn makeCtx(db: database_mod.InMemoryDB) context_mod.DefaultContext {
 
 test "ADDRESS: pushes executing contract address" {
     var interp = makeInterp();
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    environment.opAddress(&ic);
+    ops.opAddress(&ic);
 
     try expect(interp.bytecode.continue_execution);
     const got = interp.stack.popUnsafe();
@@ -49,9 +51,9 @@ test "ADDRESS: pushes executing contract address" {
 
 test "CALLER: pushes msg.sender" {
     var interp = makeInterp();
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    environment.opCaller(&ic);
+    ops.opCaller(&ic);
 
     try expect(interp.bytecode.continue_execution);
     const got = interp.stack.popUnsafe();
@@ -61,9 +63,9 @@ test "CALLER: pushes msg.sender" {
 test "CALLVALUE: pushes msg.value" {
     var interp = makeInterp();
     interp.input.value = 0xDEADBEEF;
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    environment.opCallvalue(&ic);
+    ops.opCallvalue(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 0xDEADBEEF), interp.stack.popUnsafe());
@@ -72,9 +74,9 @@ test "CALLVALUE: pushes msg.value" {
 test "CALLVALUE: zero value" {
     var interp = makeInterp();
     interp.input.value = 0;
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    environment.opCallvalue(&ic);
+    ops.opCallvalue(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
@@ -83,9 +85,9 @@ test "CALLVALUE: zero value" {
 test "CALLDATASIZE: empty calldata returns zero" {
     var interp = makeInterp();
     interp.input.data = @as(primitives.Bytes, @constCast(&[_]u8{}));
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    environment.opCalldatasize(&ic);
+    ops.opCalldatasize(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
@@ -95,9 +97,9 @@ test "CALLDATASIZE: non-empty calldata" {
     const data = [_]u8{ 0x01, 0x02, 0x03, 0x04 };
     var interp = makeInterp();
     interp.input.data = @as(primitives.Bytes, @constCast(&data));
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    environment.opCalldatasize(&ic);
+    ops.opCalldatasize(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 4), interp.stack.popUnsafe());
@@ -110,9 +112,9 @@ test "CALLDATALOAD: reads 32 bytes from calldata at offset 0" {
     var interp = makeInterp();
     interp.input.data = @as(primitives.Bytes, @constCast(&data));
     interp.stack.pushUnsafe(0); // offset = 0
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    environment.opCalldataload(&ic);
+    ops.opCalldataload(&ic);
 
     try expect(interp.bytecode.continue_execution);
     const expected: U = @as(U, 0xAB) << 248;
@@ -124,9 +126,9 @@ test "CALLDATALOAD: offset beyond calldata returns zero" {
     var interp = makeInterp();
     interp.input.data = @as(primitives.Bytes, @constCast(&data));
     interp.stack.pushUnsafe(100); // offset past end
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    environment.opCalldataload(&ic);
+    ops.opCalldataload(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
@@ -138,9 +140,9 @@ test "CALLDATALOAD: partial calldata pads with zeros" {
     var interp = makeInterp();
     interp.input.data = @as(primitives.Bytes, @constCast(&data));
     interp.stack.pushUnsafe(0);
-    var ic = InstructionContext{ .interpreter = &interp };
+    var ic = InstructionContext(TestDB){ .interpreter = &interp };
 
-    environment.opCalldataload(&ic);
+    ops.opCalldataload(&ic);
 
     try expect(interp.bytecode.continue_execution);
     const expected: U = (@as(U, 0x01) << 248) | (@as(U, 0x02) << 240) |
@@ -158,10 +160,10 @@ test "COINBASE: pushes block beneficiary" {
     ctx.block.beneficiary = COINBASE_ADDR;
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    environment.opCoinbase(&ic);
+    ops.opCoinbase(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(host_module.addressToU256(COINBASE_ADDR), interp.stack.popUnsafe());
@@ -173,10 +175,10 @@ test "TIMESTAMP: pushes block timestamp" {
     ctx.block.timestamp = 1_700_000_000;
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    environment.opTimestamp(&ic);
+    ops.opTimestamp(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 1_700_000_000), interp.stack.popUnsafe());
@@ -188,10 +190,10 @@ test "NUMBER: pushes block number" {
     ctx.block.number = 19_000_000;
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    environment.opNumber(&ic);
+    ops.opNumber(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 19_000_000), interp.stack.popUnsafe());
@@ -203,10 +205,10 @@ test "GASLIMIT: pushes block gas limit" {
     ctx.block.gas_limit = 30_000_000;
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    environment.opGaslimit(&ic);
+    ops.opGaslimit(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 30_000_000), interp.stack.popUnsafe());
@@ -218,10 +220,10 @@ test "BASEFEE: pushes block base fee" {
     ctx.block.basefee = 7;
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    environment.opBasefee(&ic);
+    ops.opBasefee(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 7), interp.stack.popUnsafe());
@@ -233,10 +235,10 @@ test "CHAINID: pushes chain id" {
     ctx.cfg.chain_id = 137; // Polygon
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    environment.opChainid(&ic);
+    ops.opChainid(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 137), interp.stack.popUnsafe());
@@ -248,10 +250,10 @@ test "ORIGIN: pushes transaction origin" {
     ctx.tx.caller = ORIGIN_ADDR;
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    environment.opOrigin(&ic);
+    ops.opOrigin(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(host_module.addressToU256(ORIGIN_ADDR), interp.stack.popUnsafe());
@@ -264,10 +266,10 @@ test "GASPRICE: pushes effective gas price for legacy transaction" {
     ctx.tx.gas_priority_fee = null; // legacy tx
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    environment.opGasprice(&ic);
+    ops.opGasprice(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 20_000_000_000), interp.stack.popUnsafe());
@@ -286,10 +288,10 @@ test "DIFFICULTY: pre-merge returns block difficulty" {
 
     var interp = makeInterp();
     interp.runtime_flags.spec_id = .london; // pre-merge
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    environment.opDifficulty(&ic);
+    ops.opDifficulty(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 0xDEAD), interp.stack.popUnsafe());
@@ -304,10 +306,10 @@ test "DIFFICULTY: post-merge with prevrandao returns randao value" {
 
     var interp = makeInterp();
     // runtime_flags.spec_id defaults to .prague (post-merge) from defaultExt
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    environment.opDifficulty(&ic);
+    ops.opDifficulty(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(host_module.hashToU256(RANDAO), interp.stack.popUnsafe());
@@ -320,10 +322,10 @@ test "DIFFICULTY: post-merge without prevrandao falls back to difficulty field" 
     ctx.block.difficulty = 0xABCD;
 
     var interp = makeInterp();
-    var host = Host.fromCtx(&ctx, null);
-    var ic = InstructionContext{ .interpreter = &interp, .host = &host };
+    var host = host_module.fromCtx(&ctx, null);
+    var ic = InstructionContext(TestDB){ .interpreter = &interp, .host = &host };
 
-    environment.opDifficulty(&ic);
+    ops.opDifficulty(&ic);
 
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 0xABCD), interp.stack.popUnsafe());

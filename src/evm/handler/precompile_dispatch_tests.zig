@@ -59,7 +59,7 @@ test "precompile dispatch: IDENTITY returns input unchanged" {
     _ = try ctx.journaled_state.loadAccount(CALLER);
     _ = try ctx.journaled_state.loadAccount(IDENTITY_ADDR);
 
-    var host = interpreter_mod.Host.fromCtx(&ctx, &mevm.precompiles.precompiles);
+    var host = interpreter_mod.host_module.fromCtx(&ctx, &mevm.precompiles.precompiles);
 
     const result = host.call(.{
         .caller = CALLER,
@@ -91,7 +91,7 @@ test "precompile dispatch: IDENTITY with no data returns empty" {
     _ = try ctx.journaled_state.loadAccount(CALLER);
     _ = try ctx.journaled_state.loadAccount(IDENTITY_ADDR);
 
-    var host = interpreter_mod.Host.fromCtx(&ctx, &mevm.precompiles.precompiles);
+    var host = interpreter_mod.host_module.fromCtx(&ctx, &mevm.precompiles.precompiles);
 
     const result = host.call(.{
         .caller = CALLER,
@@ -121,7 +121,7 @@ test "precompile dispatch: out-of-gas fails and consumes all gas" {
     _ = try ctx.journaled_state.loadAccount(CALLER);
     _ = try ctx.journaled_state.loadAccount(IDENTITY_ADDR);
 
-    var host = interpreter_mod.Host.fromCtx(&ctx, &mevm.precompiles.precompiles);
+    var host = interpreter_mod.host_module.fromCtx(&ctx, &mevm.precompiles.precompiles);
 
     // IDENTITY needs at least 15 gas; give it less
     const result = host.call(.{
@@ -152,7 +152,7 @@ test "precompile dispatch: null precompiles falls back to interpreter (no precom
     _ = try ctx.journaled_state.loadAccount(CALLER);
     _ = try ctx.journaled_state.loadAccount(IDENTITY_ADDR);
 
-    var host = interpreter_mod.Host.fromCtx(&ctx, null);
+    var host = interpreter_mod.host_module.fromCtx(&ctx, null);
 
     const result = host.call(.{
         .caller = CALLER,

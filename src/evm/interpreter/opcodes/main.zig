@@ -1,133 +1,146 @@
-// Arithmetic operations
-pub const arithmetic = @import("arithmetic.zig");
-pub const opAdd = arithmetic.opAdd;
-pub const opSub = arithmetic.opSub;
-pub const opMul = arithmetic.opMul;
-pub const opDiv = arithmetic.opDiv;
-pub const opSdiv = arithmetic.opSdiv;
-pub const opMod = arithmetic.opMod;
-pub const opSmod = arithmetic.opSmod;
-pub const opAddmod = arithmetic.opAddmod;
-pub const opMulmod = arithmetic.opMulmod;
-pub const opExp = arithmetic.opExp;
-pub const opSignextend = arithmetic.opSignextend;
-
-// Bitwise operations
-pub const bitwise = @import("bitwise.zig");
-pub const opAnd = bitwise.opAnd;
-pub const opOr = bitwise.opOr;
-pub const opXor = bitwise.opXor;
-pub const opNot = bitwise.opNot;
-pub const opByte = bitwise.opByte;
-pub const opShl = bitwise.opShl;
-pub const opShr = bitwise.opShr;
-pub const opSar = bitwise.opSar;
-pub const opClz = bitwise.opClz;
-
-// Comparison operations
-pub const comparison = @import("comparison.zig");
-pub const opLt = comparison.opLt;
-pub const opGt = comparison.opGt;
-pub const opSlt = comparison.opSlt;
-pub const opSgt = comparison.opSgt;
-pub const opEq = comparison.opEq;
-pub const opIsZero = comparison.opIsZero;
-
-// Stack operations — comptime generators for PUSH/DUP/SWAP families
-pub const stack = @import("stack.zig");
-pub const opPop = stack.opPop;
-pub const opPush0 = stack.opPush0;
-pub const makePushFn = stack.makePushFn;
-pub const makeDupFn = stack.makeDupFn;
-pub const makeSwapFn = stack.makeSwapFn;
-pub const opPushNImpl = stack.opPushNImpl;
-pub const opDupNImpl = stack.opDupNImpl;
-pub const opSwapNImpl = stack.opSwapNImpl;
-pub const opDupN = stack.opDupN;
-pub const opSwapN = stack.opSwapN;
-pub const opExchange = stack.opExchange;
-
-// Control flow operations
-pub const control = @import("control.zig");
-pub const opStop = control.opStop;
-pub const opJump = control.opJump;
-pub const opJumpi = control.opJumpi;
-pub const opJumpdest = control.opJumpdest;
-pub const opPc = control.opPc;
-pub const opGas = control.opGas;
-
-// Memory operations
-pub const memory = @import("memory.zig");
-pub const opMload = memory.opMload;
-pub const opMstore = memory.opMstore;
-pub const opMstore8 = memory.opMstore8;
-pub const opMsize = memory.opMsize;
-pub const opMcopy = memory.opMcopy;
-
-// Keccak256 operation
-pub const keccak = @import("keccak.zig");
-pub const opKeccak256 = keccak.opKeccak256;
-
-// Environment opcodes (block/tx info, calldata, code access)
-pub const environment = @import("environment.zig");
-pub const opAddress = environment.opAddress;
-pub const opCaller = environment.opCaller;
-pub const opCallvalue = environment.opCallvalue;
-pub const opCalldatasize = environment.opCalldatasize;
-pub const opCalldataload = environment.opCalldataload;
-pub const opCalldatacopy = environment.opCalldatacopy;
-pub const opCodesize = environment.opCodesize;
-pub const opCodecopy = environment.opCodecopy;
-pub const opReturndatasize = environment.opReturndatasize;
-pub const opReturndatacopy = environment.opReturndatacopy;
-pub const opOrigin = environment.opOrigin;
-pub const opGasprice = environment.opGasprice;
-pub const opCoinbase = environment.opCoinbase;
-pub const opTimestamp = environment.opTimestamp;
-pub const opNumber = environment.opNumber;
-pub const opDifficulty = environment.opDifficulty;
-pub const opGaslimit = environment.opGaslimit;
-pub const opChainid = environment.opChainid;
-pub const opBasefee = environment.opBasefee;
-pub const opBlobhash = environment.opBlobhash;
-pub const opBlobbasefee = environment.opBlobbasefee;
-pub const opSlotnum = environment.opSlotnum;
-
-// Host-requiring opcodes (account state, storage, logs, selfdestruct)
-pub const host_ops = @import("host_ops.zig");
-pub const opBalance = host_ops.opBalance;
-pub const opSelfbalance = host_ops.opSelfbalance;
-pub const opExtcodesize = host_ops.opExtcodesize;
-pub const opExtcodecopy = host_ops.opExtcodecopy;
-pub const opExtcodehash = host_ops.opExtcodehash;
-pub const opBlockhash = host_ops.opBlockhash;
-pub const opSload = host_ops.opSload;
-pub const opSstore = host_ops.opSstore;
-pub const opTload = host_ops.opTload;
-pub const opTstore = host_ops.opTstore;
-pub const opLog0 = host_ops.opLog0;
-pub const opLog1 = host_ops.opLog1;
-pub const opLog2 = host_ops.opLog2;
-pub const opLog3 = host_ops.opLog3;
-pub const opLog4 = host_ops.opLog4;
-pub const opSelfdestruct = host_ops.opSelfdestruct;
-
-// System opcodes (RETURN, REVERT, INVALID)
-pub const system = @import("system.zig");
-pub const opReturn = system.opReturn;
-pub const opRevert = system.opRevert;
-pub const opInvalid = system.opInvalid;
-
-// Call family opcodes
+const arithmetic = @import("arithmetic.zig");
+const bitwise = @import("bitwise.zig");
+const comparison = @import("comparison.zig");
+const stack = @import("stack.zig");
+const control = @import("control.zig");
+const memory = @import("memory.zig");
+const keccak = @import("keccak.zig");
+const environment = @import("environment.zig");
+const host_ops = @import("host_ops.zig");
+const system = @import("system.zig");
+/// Exposed as `pub` (unlike the other per-file imports above) so callers
+/// (e.g. mainnet_builder.zig's frame runner) can reach call.zig's
+/// DB-agnostic resumeCall/resumeCreate/refundNewAccountLifo, which live
+/// outside Ops(DB) since they never touch Host or InstructionContext.
 pub const call_ops = @import("call.zig");
-pub const opCall = call_ops.opCall;
-pub const opCallcode = call_ops.opCallcode;
-pub const opDelegatecall = call_ops.opDelegatecall;
-pub const opStaticcall = call_ops.opStaticcall;
-pub const opCreate = call_ops.opCreate;
-pub const opCreate2 = call_ops.opCreate2;
 
-// Gas constants re-exported from the single source of truth
+/// Flat re-export of every opcode handler, comptime-generic over DB — see
+/// host.zig's Host(DB) doc comment. Each opXxx below is Ops(DB) from its
+/// owning file; protocol_schedule.zig builds the dispatch table by calling
+/// through this single generic namespace.
+pub fn Ops(comptime DB: type) type {
+    return struct {
+        // Arithmetic operations
+        pub const opAdd = arithmetic.Ops(DB).opAdd;
+        pub const opSub = arithmetic.Ops(DB).opSub;
+        pub const opMul = arithmetic.Ops(DB).opMul;
+        pub const opDiv = arithmetic.Ops(DB).opDiv;
+        pub const opSdiv = arithmetic.Ops(DB).opSdiv;
+        pub const opMod = arithmetic.Ops(DB).opMod;
+        pub const opSmod = arithmetic.Ops(DB).opSmod;
+        pub const opAddmod = arithmetic.Ops(DB).opAddmod;
+        pub const opMulmod = arithmetic.Ops(DB).opMulmod;
+        pub const opExp = arithmetic.Ops(DB).opExp;
+        pub const opSignextend = arithmetic.Ops(DB).opSignextend;
+
+        // Bitwise operations
+        pub const opAnd = bitwise.Ops(DB).opAnd;
+        pub const opOr = bitwise.Ops(DB).opOr;
+        pub const opXor = bitwise.Ops(DB).opXor;
+        pub const opNot = bitwise.Ops(DB).opNot;
+        pub const opByte = bitwise.Ops(DB).opByte;
+        pub const opShl = bitwise.Ops(DB).opShl;
+        pub const opShr = bitwise.Ops(DB).opShr;
+        pub const opSar = bitwise.Ops(DB).opSar;
+        pub const opClz = bitwise.Ops(DB).opClz;
+
+        // Comparison operations
+        pub const opLt = comparison.Ops(DB).opLt;
+        pub const opGt = comparison.Ops(DB).opGt;
+        pub const opSlt = comparison.Ops(DB).opSlt;
+        pub const opSgt = comparison.Ops(DB).opSgt;
+        pub const opEq = comparison.Ops(DB).opEq;
+        pub const opIsZero = comparison.Ops(DB).opIsZero;
+
+        // Stack operations — comptime generators for PUSH/DUP/SWAP families
+        pub const opPop = stack.Ops(DB).opPop;
+        pub const opPush0 = stack.Ops(DB).opPush0;
+        pub const makePushFn = stack.Ops(DB).makePushFn;
+        pub const makeDupFn = stack.Ops(DB).makeDupFn;
+        pub const makeSwapFn = stack.Ops(DB).makeSwapFn;
+        pub const opPushNImpl = stack.Ops(DB).opPushNImpl;
+        pub const opDupNImpl = stack.Ops(DB).opDupNImpl;
+        pub const opSwapNImpl = stack.Ops(DB).opSwapNImpl;
+        pub const opDupN = stack.Ops(DB).opDupN;
+        pub const opSwapN = stack.Ops(DB).opSwapN;
+        pub const opExchange = stack.Ops(DB).opExchange;
+
+        // Control flow operations
+        pub const opStop = control.Ops(DB).opStop;
+        pub const opJump = control.Ops(DB).opJump;
+        pub const opJumpi = control.Ops(DB).opJumpi;
+        pub const opJumpdest = control.Ops(DB).opJumpdest;
+        pub const opPc = control.Ops(DB).opPc;
+        pub const opGas = control.Ops(DB).opGas;
+
+        // Memory operations
+        pub const opMload = memory.Ops(DB).opMload;
+        pub const opMstore = memory.Ops(DB).opMstore;
+        pub const opMstore8 = memory.Ops(DB).opMstore8;
+        pub const opMsize = memory.Ops(DB).opMsize;
+        pub const opMcopy = memory.Ops(DB).opMcopy;
+
+        // Keccak256 operation
+        pub const opKeccak256 = keccak.Ops(DB).opKeccak256;
+
+        // Environment opcodes (block/tx info, calldata, code access)
+        pub const opAddress = environment.Ops(DB).opAddress;
+        pub const opCaller = environment.Ops(DB).opCaller;
+        pub const opCallvalue = environment.Ops(DB).opCallvalue;
+        pub const opCalldatasize = environment.Ops(DB).opCalldatasize;
+        pub const opCalldataload = environment.Ops(DB).opCalldataload;
+        pub const opCalldatacopy = environment.Ops(DB).opCalldatacopy;
+        pub const opCodesize = environment.Ops(DB).opCodesize;
+        pub const opCodecopy = environment.Ops(DB).opCodecopy;
+        pub const opReturndatasize = environment.Ops(DB).opReturndatasize;
+        pub const opReturndatacopy = environment.Ops(DB).opReturndatacopy;
+        pub const opOrigin = environment.Ops(DB).opOrigin;
+        pub const opGasprice = environment.Ops(DB).opGasprice;
+        pub const opCoinbase = environment.Ops(DB).opCoinbase;
+        pub const opTimestamp = environment.Ops(DB).opTimestamp;
+        pub const opNumber = environment.Ops(DB).opNumber;
+        pub const opDifficulty = environment.Ops(DB).opDifficulty;
+        pub const opGaslimit = environment.Ops(DB).opGaslimit;
+        pub const opChainid = environment.Ops(DB).opChainid;
+        pub const opBasefee = environment.Ops(DB).opBasefee;
+        pub const opBlobhash = environment.Ops(DB).opBlobhash;
+        pub const opBlobbasefee = environment.Ops(DB).opBlobbasefee;
+        pub const opSlotnum = environment.Ops(DB).opSlotnum;
+
+        // Host-requiring opcodes (account state, storage, logs, selfdestruct)
+        pub const opBalance = host_ops.Ops(DB).opBalance;
+        pub const opSelfbalance = host_ops.Ops(DB).opSelfbalance;
+        pub const opExtcodesize = host_ops.Ops(DB).opExtcodesize;
+        pub const opExtcodecopy = host_ops.Ops(DB).opExtcodecopy;
+        pub const opExtcodehash = host_ops.Ops(DB).opExtcodehash;
+        pub const opBlockhash = host_ops.Ops(DB).opBlockhash;
+        pub const opSload = host_ops.Ops(DB).opSload;
+        pub const opSstore = host_ops.Ops(DB).opSstore;
+        pub const opTload = host_ops.Ops(DB).opTload;
+        pub const opTstore = host_ops.Ops(DB).opTstore;
+        pub const opLog0 = host_ops.Ops(DB).opLog0;
+        pub const opLog1 = host_ops.Ops(DB).opLog1;
+        pub const opLog2 = host_ops.Ops(DB).opLog2;
+        pub const opLog3 = host_ops.Ops(DB).opLog3;
+        pub const opLog4 = host_ops.Ops(DB).opLog4;
+        pub const opSelfdestruct = host_ops.Ops(DB).opSelfdestruct;
+
+        // System opcodes (RETURN, REVERT, INVALID)
+        pub const opReturn = system.Ops(DB).opReturn;
+        pub const opRevert = system.Ops(DB).opRevert;
+        pub const opInvalid = system.Ops(DB).opInvalid;
+
+        // Call family opcodes
+        pub const opCall = call_ops.Ops(DB).opCall;
+        pub const opCallcode = call_ops.Ops(DB).opCallcode;
+        pub const opDelegatecall = call_ops.Ops(DB).opDelegatecall;
+        pub const opStaticcall = call_ops.Ops(DB).opStaticcall;
+        pub const opCreate = call_ops.Ops(DB).opCreate;
+        pub const opCreate2 = call_ops.Ops(DB).opCreate2;
+    };
+}
+
+// Gas constants re-exported from the single source of truth (DB-independent).
 const gas_costs = @import("../gas_costs.zig");
 pub const GAS_BASE = gas_costs.G_BASE;
 pub const GAS_VERYLOW = gas_costs.G_VERYLOW;

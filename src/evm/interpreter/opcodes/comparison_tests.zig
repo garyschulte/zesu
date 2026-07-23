@@ -1,15 +1,19 @@
 const std = @import("std");
 const primitives = @import("primitives");
+const database = @import("database");
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const InstructionContext = @import("../instruction_context.zig").InstructionContext;
 const comparison = @import("comparison.zig");
 
-const opLt = comparison.opLt;
-const opGt = comparison.opGt;
-const opSlt = comparison.opSlt;
-const opSgt = comparison.opSgt;
-const opEq = comparison.opEq;
-const opIsZero = comparison.opIsZero;
+/// No host needed in these tests — bind the dispatch table to any concrete DB.
+const TestDB = database.InMemoryDB;
+const ops = comparison.Ops(TestDB);
+const opLt = ops.opLt;
+const opGt = ops.opGt;
+const opSlt = ops.opSlt;
+const opSgt = ops.opSgt;
+const opEq = ops.opEq;
+const opIsZero = ops.opIsZero;
 
 const expectEqual = std.testing.expectEqual;
 const expect = std.testing.expect;
@@ -22,7 +26,7 @@ test "LT: 5 < 10" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 10)); // right operand (goes to second)
     interp.stack.pushUnsafe(@as(U, 5)); // left operand (top → µs[0])
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opLt(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
@@ -32,7 +36,7 @@ test "LT: 10 < 5 is false" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 5)); // right operand
     interp.stack.pushUnsafe(@as(U, 10)); // left operand (top)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opLt(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -41,7 +45,7 @@ test "LT: equal values = false" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 42));
     interp.stack.pushUnsafe(@as(U, 42));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opLt(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -50,7 +54,7 @@ test "LT: 0 < MAX" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(MAX); // right operand
     interp.stack.pushUnsafe(@as(U, 0)); // left operand (top)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opLt(&ctx);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
 }
@@ -58,7 +62,7 @@ test "LT: 0 < MAX" {
 test "LT: stack underflow" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 1));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opLt(&ctx);
     try expectEqual(.stack_underflow, interp.result);
 }
@@ -69,7 +73,7 @@ test "GT: 10 > 5" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 5)); // right operand
     interp.stack.pushUnsafe(@as(U, 10)); // left operand (top)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opGt(&ctx);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
 }
@@ -78,7 +82,7 @@ test "GT: 5 > 10 is false" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 10)); // right operand
     interp.stack.pushUnsafe(@as(U, 5)); // left operand (top)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opGt(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -87,7 +91,7 @@ test "GT: equal values = false" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 42));
     interp.stack.pushUnsafe(@as(U, 42));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opGt(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -98,7 +102,7 @@ test "SLT: positive < positive" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 10)); // right operand
     interp.stack.pushUnsafe(@as(U, 5)); // left operand (top)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opSlt(&ctx);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
 }
@@ -108,7 +112,7 @@ test "SLT: negative < positive" {
     const negative: U = @as(U, 1) << 255; // most negative
     interp.stack.pushUnsafe(@as(U, 1)); // right operand
     interp.stack.pushUnsafe(negative); // left operand (top)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opSlt(&ctx);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
 }
@@ -118,7 +122,7 @@ test "SLT: positive < negative is false" {
     const negative: U = @as(U, 1) << 255;
     interp.stack.pushUnsafe(negative); // right operand
     interp.stack.pushUnsafe(@as(U, 1)); // left operand (top)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opSlt(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -129,7 +133,7 @@ test "SLT: -1 < -2 is false (both negative)" {
     const minus_two: U = MAX - 1;
     interp.stack.pushUnsafe(minus_two); // right operand
     interp.stack.pushUnsafe(minus_one); // left operand (top)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opSlt(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -140,7 +144,7 @@ test "SGT: 10 > 5" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 5)); // right operand
     interp.stack.pushUnsafe(@as(U, 10)); // left operand (top)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opSgt(&ctx);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
 }
@@ -150,7 +154,7 @@ test "SGT: positive > negative" {
     const negative: U = @as(U, 1) << 255;
     interp.stack.pushUnsafe(negative); // right operand
     interp.stack.pushUnsafe(@as(U, 1)); // left operand (top)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opSgt(&ctx);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
 }
@@ -160,7 +164,7 @@ test "SGT: negative > positive is false" {
     const negative: U = @as(U, 1) << 255;
     interp.stack.pushUnsafe(@as(U, 1)); // right operand
     interp.stack.pushUnsafe(negative); // left operand (top)
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opSgt(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -171,7 +175,7 @@ test "EQ: equal values" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 42));
     interp.stack.pushUnsafe(@as(U, 42));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opEq(&ctx);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
 }
@@ -180,7 +184,7 @@ test "EQ: different values" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 42));
     interp.stack.pushUnsafe(@as(U, 43));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opEq(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -189,7 +193,7 @@ test "EQ: zero == zero" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0));
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opEq(&ctx);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
 }
@@ -198,7 +202,7 @@ test "EQ: MAX == MAX" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(MAX);
     interp.stack.pushUnsafe(MAX);
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opEq(&ctx);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
 }
@@ -208,7 +212,7 @@ test "EQ: MAX == MAX" {
 test "ISZERO: zero = 1" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opIsZero(&ctx);
     try expectEqual(@as(U, 1), interp.stack.popUnsafe());
 }
@@ -216,7 +220,7 @@ test "ISZERO: zero = 1" {
 test "ISZERO: non-zero = 0" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 42));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opIsZero(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
@@ -224,14 +228,14 @@ test "ISZERO: non-zero = 0" {
 test "ISZERO: MAX = 0" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(MAX);
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opIsZero(&ctx);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
 }
 
 test "ISZERO: stack underflow" {
     var interp = Interpreter.defaultExt();
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opIsZero(&ctx);
     try expectEqual(.stack_underflow, interp.result);
 }

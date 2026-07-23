@@ -119,553 +119,453 @@ pub const CreateResult = struct {
     }
 };
 
-// ─── Journal vtable ─────────────────────────────────────────────────────────
-
-/// Type-erased vtable for Journal operations.
-/// 14 simple entries (operate on *anyopaque journal) + 4 complex entries (operate on *Host).
-pub const JournalVTable = struct {
-    // Simple entries — operate on the type-erased journal pointer directly.
-    isAddressCold: *const fn (*anyopaque, primitives.Address) bool,
-    isStorageCold: *const fn (*anyopaque, primitives.Address, primitives.StorageKey) bool,
-    isAddressLoaded: *const fn (*anyopaque, primitives.Address) bool,
-    accountInfo: *const fn (*anyopaque, primitives.Address) anyerror!context_mod.AccountInfoLoad,
-    loadAccountWithCode: *const fn (*anyopaque, primitives.Address) anyerror!context_mod.StateLoad(*const state_mod.Account),
-    sload: *const fn (*anyopaque, primitives.Address, primitives.StorageKey) anyerror!context_mod.StateLoad(primitives.StorageValue),
-    sstore: *const fn (*anyopaque, primitives.Address, primitives.StorageKey, primitives.StorageValue) anyerror!context_mod.StateLoad(context_mod.SStoreResult),
-    tload: *const fn (*anyopaque, primitives.Address, primitives.StorageKey) primitives.StorageValue,
-    tstore: *const fn (*anyopaque, primitives.Address, primitives.StorageKey, primitives.StorageValue) void,
-    emitLog: *const fn (*anyopaque, primitives.Log) void,
-    selfdestruct: *const fn (*anyopaque, primitives.Address, primitives.Address) anyerror!context_mod.StateLoad(context_mod.SelfDestructResult),
-    blockHashDb: *const fn (*anyopaque, u64) anyerror!?primitives.Hash,
-
-    // Complex entries — receive *Host so they can access block/cfg/precompiles in addition to journal.
-    setupCall: *const fn (*Host, CallInputs, usize) Host.CallSetupResult,
-    finalizeCall: *const fn (*Host, JournalCheckpoint, InstructionResult, u64, u64, i64, []const u8) CallResult,
-    setupCreate: *const fn (*Host, primitives.Address, primitives.U256, []const u8, u64, bool, primitives.U256, bool, usize, bool) Host.CreateSetupResult,
-    finalizeCreate: *const fn (*Host, JournalCheckpoint, primitives.Address, InstructionResult, u64, i64, []const u8, primitives.SpecId, bool, u64) CreateResult,
-    recordCreateTarget: *const fn (*Host, primitives.Address, primitives.U256, []const u8, bool, primitives.U256, usize) ?bool,
-
-    /// Return a comptime-constant vtable for the given DB type.
-    pub fn forDb(comptime DB: type) *const JournalVTable {
-        const Impl = struct {
-            const vtable: JournalVTable = .{
-                .isAddressCold = isAddressColdFn,
-                .isStorageCold = isStorageColdFn,
-                .isAddressLoaded = isAddressLoadedFn,
-                .accountInfo = accountInfoFn,
-                .loadAccountWithCode = loadAccountWithCodeFn,
-                .sload = sloadFn,
-                .sstore = sstoreFn,
-                .tload = tloadFn,
-                .tstore = tstoreFn,
-                .emitLog = emitLogFn,
-                .selfdestruct = selfdestructFn,
-                .blockHashDb = blockHashDbFn,
-                .setupCall = setupCallFn,
-                .finalizeCall = finalizeCallFn,
-                .setupCreate = setupCreateFn,
-                .finalizeCreate = finalizeCreateFn,
-                .recordCreateTarget = recordCreateTargetFn,
-            };
-
-            fn j(ptr: *anyopaque) *context_mod.Journal(DB) {
-                return @ptrCast(@alignCast(ptr));
-            }
-
-            fn isAddressColdFn(ptr: *anyopaque, addr: primitives.Address) bool {
-                return j(ptr).isAddressCold(addr);
-            }
-            fn isStorageColdFn(ptr: *anyopaque, addr: primitives.Address, key: primitives.StorageKey) bool {
-                return j(ptr).isStorageCold(addr, key);
-            }
-            fn isAddressLoadedFn(ptr: *anyopaque, addr: primitives.Address) bool {
-                return j(ptr).isAddressLoaded(addr);
-            }
-            fn accountInfoFn(ptr: *anyopaque, addr: primitives.Address) anyerror!context_mod.AccountInfoLoad {
-                return j(ptr).loadAccountInfoSkipColdLoad(addr, false, false);
-            }
-            fn loadAccountWithCodeFn(ptr: *anyopaque, addr: primitives.Address) anyerror!context_mod.StateLoad(*const state_mod.Account) {
-                return j(ptr).loadAccountWithCode(addr);
-            }
-            fn sloadFn(ptr: *anyopaque, addr: primitives.Address, key: primitives.StorageKey) anyerror!context_mod.StateLoad(primitives.StorageValue) {
-                return j(ptr).sload(addr, key);
-            }
-            fn sstoreFn(ptr: *anyopaque, addr: primitives.Address, key: primitives.StorageKey, val: primitives.StorageValue) anyerror!context_mod.StateLoad(context_mod.SStoreResult) {
-                return j(ptr).sstore(addr, key, val);
-            }
-            fn tloadFn(ptr: *anyopaque, addr: primitives.Address, key: primitives.StorageKey) primitives.StorageValue {
-                return j(ptr).tload(addr, key);
-            }
-            fn tstoreFn(ptr: *anyopaque, addr: primitives.Address, key: primitives.StorageKey, val: primitives.StorageValue) void {
-                j(ptr).tstore(addr, key, val);
-            }
-            fn emitLogFn(ptr: *anyopaque, log_entry: primitives.Log) void {
-                j(ptr).log(log_entry);
-            }
-            fn selfdestructFn(ptr: *anyopaque, addr: primitives.Address, target: primitives.Address) anyerror!context_mod.StateLoad(context_mod.SelfDestructResult) {
-                return j(ptr).selfdestruct(addr, target);
-            }
-            fn blockHashDbFn(ptr: *anyopaque, number: u64) anyerror!?primitives.Hash {
-                return @as(?primitives.Hash, try j(ptr).getDbMut().blockHash(number));
-            }
-            fn setupCallFn(host: *Host, inputs: CallInputs, frame_depth: usize) Host.CallSetupResult {
-                return setupCallCore(j(host.js), host, inputs, frame_depth);
-            }
-            fn finalizeCallFn(host: *Host, checkpoint: JournalCheckpoint, result: InstructionResult, gas_limit: u64, gas_remaining: u64, gas_refunded: i64, return_data: []const u8) CallResult {
-                return finalizeCallCore(j(host.js), checkpoint, result, gas_limit, gas_remaining, gas_refunded, return_data);
-            }
-            fn setupCreateFn(host: *Host, caller: primitives.Address, value: primitives.U256, init_code: []const u8, gas_limit: u64, is_create2: bool, salt: primitives.U256, skip_nonce_bump: bool, frame_depth: usize, is_opcode_create: bool) Host.CreateSetupResult {
-                return setupCreateCore(j(host.js), host, caller, value, init_code, gas_limit, is_create2, salt, skip_nonce_bump, frame_depth, is_opcode_create);
-            }
-            fn finalizeCreateFn(host: *Host, checkpoint: JournalCheckpoint, new_addr: primitives.Address, result: InstructionResult, gas_remaining: u64, gas_refunded: i64, return_data: []const u8, spec_id: primitives.SpecId, is_opcode_create: bool, gas_reservoir: u64) CreateResult {
-                return finalizeCreateCore(j(host.js), host, checkpoint, new_addr, result, gas_remaining, gas_refunded, return_data, spec_id, is_opcode_create, gas_reservoir);
-            }
-            fn recordCreateTargetFn(host: *Host, caller: primitives.Address, value: primitives.U256, init_code: []const u8, is_create2: bool, salt: primitives.U256, frame_depth: usize) ?bool {
-                return recordCreateTargetCore(j(host.js), host, caller, value, init_code, is_create2, salt, frame_depth);
-            }
-        };
-        return &Impl.vtable;
-    }
-};
-
 // ─── Host ───────────────────────────────────────────────────────────────────
 
 /// The Host bridges opcode handlers to the EVM execution context.
 /// It stores direct pointers to the context's block/tx/cfg/error fields,
-/// plus a type-erased pointer to the Journal and a vtable for dispatch.
-/// This allows opcode handlers to remain concrete (no generics) while
-/// supporting different DB types (InMemoryDB, WitnessDatabase, …).
-pub const Host = struct {
-    block: *context_mod.BlockEnv,
-    tx: *context_mod.TxEnv,
-    cfg: *const context_mod.CfgEnv,
-    ctx_error: *context_mod.ContextError,
-    /// Type-erased *Journal(DB). Cast via vtable implementations.
-    js: *anyopaque,
-    js_vtable: *const JournalVTable,
-    /// Precompile set for the current spec. Null disables precompile dispatch (benchmarks/unit tests).
-    precompiles: ?*const precompile_mod.Precompiles = null,
+/// plus a concrete pointer to the Journal(DB). Comptime-generic over DB: every
+/// Journal call below compiles to a direct, inlinable call — there is no
+/// runtime dispatch layer. The set of DB implementations (InMemoryDB,
+/// WitnessDatabase, …) is closed and known at compile time, so this is the
+/// idiomatic Zig shape for "one of a known set of concrete types" — the
+/// alternative (a hand-rolled *anyopaque + function-pointer vtable) is the
+/// tool for an open/unbounded set of implementations, which this isn't.
+pub fn Host(comptime DB: type) type {
+    return struct {
+        const Self = @This();
 
-    /// Create a Host from any Context(DB). DB is resolved at comptime.
-    pub fn init(comptime DB: type, ctx: *context_mod.Context(DB), prec: ?*const precompile_mod.Precompiles) Host {
-        return .{
-            .block = &ctx.block,
-            .tx = &ctx.tx,
-            .cfg = &ctx.cfg,
-            .ctx_error = &ctx.ctx_error,
-            .js = &ctx.journaled_state,
-            .js_vtable = JournalVTable.forDb(DB),
-            .precompiles = prec,
-        };
-    }
+        block: *context_mod.BlockEnv,
+        tx: *context_mod.TxEnv,
+        cfg: *const context_mod.CfgEnv,
+        ctx_error: *context_mod.ContextError,
+        /// Concrete journal pointer — no type erasure, no vtable.
+        js: *context_mod.Journal(DB),
+        /// Precompile set for the current spec. Null disables precompile dispatch (benchmarks/unit tests).
+        precompiles: ?*const precompile_mod.Precompiles = null,
 
-    /// Convenience constructor for the default InMemoryDB context.
-    pub fn fromCtx(ctx: *context_mod.DefaultContext, prec: ?*const precompile_mod.Precompiles) Host {
-        return init(database_mod.InMemoryDB, ctx, prec);
-    }
-
-    // -----------------------------------------------------------------------
-    // Block / transaction environment (no state access required)
-    // -----------------------------------------------------------------------
-
-    pub fn origin(self: *Host) primitives.Address {
-        return self.tx.caller;
-    }
-
-    pub fn gasPrice(self: *Host) primitives.U256 {
-        const max_fee = self.tx.gas_price;
-        if (self.tx.gas_priority_fee) |priority_fee| {
-            const base_fee: u128 = @intCast(self.block.basefee);
-            const effective = @min(max_fee, base_fee + priority_fee);
-            return @as(primitives.U256, effective);
+        /// Create a Host from a Context(DB).
+        pub fn init(ctx: *context_mod.Context(DB), prec: ?*const precompile_mod.Precompiles) Self {
+            return .{
+                .block = &ctx.block,
+                .tx = &ctx.tx,
+                .cfg = &ctx.cfg,
+                .ctx_error = &ctx.ctx_error,
+                .js = &ctx.journaled_state,
+                .precompiles = prec,
+            };
         }
-        return @as(primitives.U256, max_fee);
-    }
 
-    pub fn coinbase(self: *Host) primitives.Address {
-        return self.block.beneficiary;
-    }
+        // -----------------------------------------------------------------------
+        // Block / transaction environment (no state access required)
+        // -----------------------------------------------------------------------
 
-    pub fn blockNumber(self: *Host) primitives.U256 {
-        return self.block.number;
-    }
+        pub fn origin(self: *Self) primitives.Address {
+            return self.tx.caller;
+        }
 
-    pub fn timestamp(self: *Host) primitives.U256 {
-        return self.block.timestamp;
-    }
+        pub fn gasPrice(self: *Self) primitives.U256 {
+            const max_fee = self.tx.gas_price;
+            if (self.tx.gas_priority_fee) |priority_fee| {
+                const base_fee: u128 = @intCast(self.block.basefee);
+                const effective = @min(max_fee, base_fee + priority_fee);
+                return @as(primitives.U256, effective);
+            }
+            return @as(primitives.U256, max_fee);
+        }
 
-    pub fn blockGasLimit(self: *Host) u64 {
-        return self.block.gas_limit;
-    }
+        pub fn coinbase(self: *Self) primitives.Address {
+            return self.block.beneficiary;
+        }
 
-    pub fn difficulty(self: *Host) primitives.U256 {
-        return self.block.difficulty;
-    }
+        pub fn blockNumber(self: *Self) primitives.U256 {
+            return self.block.number;
+        }
 
-    pub fn prevrandao(self: *Host) ?primitives.Hash {
-        return self.block.prevrandao;
-    }
+        pub fn timestamp(self: *Self) primitives.U256 {
+            return self.block.timestamp;
+        }
 
-    pub fn chainId(self: *Host) u64 {
-        return self.cfg.chain_id;
-    }
+        pub fn blockGasLimit(self: *Self) u64 {
+            return self.block.gas_limit;
+        }
 
-    pub fn basefee(self: *Host) u64 {
-        return self.block.basefee;
-    }
+        pub fn difficulty(self: *Self) primitives.U256 {
+            return self.block.difficulty;
+        }
 
-    pub fn blobBasefee(self: *Host) u128 {
-        if (self.block.blob_excess_gas_and_price) |b| return b.blob_gasprice;
-        return 0;
-    }
+        pub fn prevrandao(self: *Self) ?primitives.Hash {
+            return self.block.prevrandao;
+        }
 
-    pub fn blobHash(self: *Host, index: usize) ?primitives.U256 {
-        const blob_hashes = self.tx.blob_hashes orelse return null;
-        if (index >= blob_hashes.items.len) return null;
-        return hashToU256(blob_hashes.items[index]);
-    }
+        pub fn chainId(self: *Self) u64 {
+            return self.cfg.chain_id;
+        }
 
-    pub fn blockHash(self: *Host, number: u64) ?primitives.Hash {
-        const current: u64 = @intCast(self.block.number);
-        if (number >= current) return [_]u8{0} ** 32;
-        if (current - number > primitives.BLOCK_HASH_HISTORY) return [_]u8{0} ** 32;
-        return self.js_vtable.blockHashDb(self.js, number) catch {
-            self.ctx_error.* = context_mod.ContextError.database_error;
-            return null;
+        pub fn basefee(self: *Self) u64 {
+            return self.block.basefee;
+        }
+
+        pub fn blobBasefee(self: *Self) u128 {
+            if (self.block.blob_excess_gas_and_price) |b| return b.blob_gasprice;
+            return 0;
+        }
+
+        pub fn blobHash(self: *Self, index: usize) ?primitives.U256 {
+            const blob_hashes = self.tx.blob_hashes orelse return null;
+            if (index >= blob_hashes.items.len) return null;
+            return hashToU256(blob_hashes.items[index]);
+        }
+
+        pub fn blockHash(self: *Self, number: u64) ?primitives.Hash {
+            const current: u64 = @intCast(self.block.number);
+            if (number >= current) return [_]u8{0} ** 32;
+            if (current - number > primitives.BLOCK_HASH_HISTORY) return [_]u8{0} ** 32;
+            return self.js.getDbMut().blockHash(number) catch {
+                self.ctx_error.* = context_mod.ContextError.database_error;
+                return null;
+            };
+        }
+
+        pub fn slotNumber(self: *Self) ?u64 {
+            return self.block.slot_number;
+        }
+
+        // -----------------------------------------------------------------------
+        // Account state access (via journaled_state)
+        // -----------------------------------------------------------------------
+
+        /// Check whether an address is cold WITHOUT loading it from the database.
+        pub fn isAddressCold(self: *Self, addr: primitives.Address) bool {
+            return self.js.isAddressCold(addr);
+        }
+
+        /// Check whether a storage slot is cold WITHOUT loading it from the database.
+        pub fn isStorageCold(self: *Self, addr: primitives.Address, key: primitives.StorageKey) bool {
+            return self.js.isStorageCold(addr, key);
+        }
+
+        /// Check whether an address is already in the EVM state cache.
+        pub fn isAddressLoaded(self: *const Self, addr: primitives.Address) bool {
+            return self.js.isAddressLoaded(addr);
+        }
+
+        /// Load account info. Returns null on database error.
+        pub fn accountInfo(self: *Self, addr: primitives.Address) ?struct { balance: primitives.U256, is_cold: bool, is_empty: bool } {
+            const load = self.js.loadAccountInfoSkipColdLoad(addr, false, false) catch return null;
+            return .{
+                .balance = load.info.balance,
+                .is_cold = load.is_cold,
+                .is_empty = load.is_empty,
+            };
+        }
+
+        /// Load account with code. On any database error, marks ctx_error so the block is
+        /// rejected and returns null.
+        pub fn codeInfo(self: *Self, addr: primitives.Address) ?struct { bytecode: bytecode_mod.Bytecode, code_hash: primitives.Hash, is_cold: bool } {
+            const load = self.js.loadAccountWithCode(addr) catch {
+                self.ctx_error.* = context_mod.ContextError.database_error;
+                return null;
+            };
+            const acc = load.data;
+            const code = if (acc.info.code) |c| c else bytecode_mod.Bytecode.new();
+            const code_hash = acc.info.code_hash;
+            return .{
+                .bytecode = code,
+                .code_hash = code_hash,
+                .is_cold = load.is_cold,
+            };
+        }
+
+        /// Load account info and code in one journal lookup.
+        /// Merges accountInfo + codeInfo into a single loadAccountWithCode call,
+        /// avoiding the redundant basic-info fetch that codeInfo would otherwise repeat.
+        pub fn accountInfoWithCode(self: *Self, addr: primitives.Address) ?struct {
+            balance: primitives.U256,
+            is_cold: bool,
+            is_empty: bool,
+            bytecode: bytecode_mod.Bytecode,
+            code_hash: primitives.Hash,
+        } {
+            const load = self.js.loadAccountWithCode(addr) catch {
+                self.ctx_error.* = context_mod.ContextError.database_error;
+                return null;
+            };
+            const acc = load.data;
+            return .{
+                .balance = acc.info.balance,
+                .is_cold = load.is_cold,
+                .is_empty = acc.stateClearAwareIsEmpty(self.cfg.spec),
+                .bytecode = if (acc.info.code) |c| c else bytecode_mod.Bytecode.new(),
+                .code_hash = acc.info.code_hash,
+            };
+        }
+
+        /// Load account for EXTCODEHASH. Returns null on database error.
+        /// Uses accountInfo (no code loading) since EXTCODEHASH only needs the hash stored
+        /// in the account — it does not read or execute the bytecode itself.
+        pub fn extCodeHash(self: *Self, addr: primitives.Address) ?struct { hash: primitives.Hash, is_cold: bool, is_empty: bool } {
+            const load = self.js.loadAccountInfoSkipColdLoad(addr, false, false) catch {
+                self.ctx_error.* = context_mod.ContextError.database_error;
+                return null;
+            };
+            return .{
+                .hash = load.info.code_hash,
+                .is_cold = load.is_cold,
+                .is_empty = load.is_empty,
+            };
+        }
+
+        pub fn sload(self: *Self, addr: primitives.Address, key: primitives.U256) ?struct { value: primitives.U256, is_cold: bool } {
+            const load = self.js.sload(addr, key) catch return null;
+            return .{ .value = load.data, .is_cold = load.is_cold };
+        }
+
+        pub fn sstore(self: *Self, addr: primitives.Address, key: primitives.U256, val: primitives.U256) ?struct { original: primitives.U256, current: primitives.U256, new: primitives.U256, is_cold: bool } {
+            const result = self.js.sstore(addr, key, val) catch return null;
+            return .{
+                .original = result.data.original_value,
+                .current = result.data.present_value,
+                .new = result.data.new_value,
+                .is_cold = result.is_cold,
+            };
+        }
+
+        pub fn tload(self: *Self, addr: primitives.Address, key: primitives.U256) primitives.U256 {
+            return self.js.tload(addr, key);
+        }
+
+        pub fn tstore(self: *Self, addr: primitives.Address, key: primitives.U256, val: primitives.U256) void {
+            self.js.tstore(addr, key, val);
+        }
+
+        pub fn emitLog(self: *Self, log_entry: primitives.Log) void {
+            self.js.log(log_entry);
+        }
+
+        pub fn selfdestruct(self: *Self, addr: primitives.Address, target: primitives.Address) ?SelfDestructLoadResult {
+            const result = self.js.selfdestruct(addr, target) catch return null;
+            return .{
+                .had_value = result.data.had_value,
+                .target_exists = result.data.target_exists,
+                .previously_destroyed = result.data.previously_destroyed,
+                .is_cold = result.is_cold,
+            };
+        }
+
+        // -----------------------------------------------------------------------
+        // Sub-call dispatch: setup/finalize split for iterative frame runner
+        // -----------------------------------------------------------------------
+
+        /// Result of setupCall: either already resolved (precompile or failure),
+        /// or ready to launch a sub-frame.
+        pub const CallSetupResult = union(enum) {
+            /// Pre-execution failure (depth, value transfer, etc.): all gas returned.
+            failed: CallResult,
+            /// Precompile executed synchronously: result is final.
+            precompile: CallResult,
+            /// Sub-frame needed: checkpoint taken, code loaded, delegation_gas computed.
+            ready: struct {
+                checkpoint: JournalCheckpoint,
+                code: bytecode_mod.Bytecode,
+                delegation_gas: u64,
+            },
         };
-    }
 
-    pub fn slotNumber(self: *Host) ?u64 {
-        return self.block.slot_number;
-    }
-
-    // -----------------------------------------------------------------------
-    // Account state access (via journaled_state)
-    // -----------------------------------------------------------------------
-
-    /// Check whether an address is cold WITHOUT loading it from the database.
-    pub fn isAddressCold(self: *Host, addr: primitives.Address) bool {
-        return self.js_vtable.isAddressCold(self.js, addr);
-    }
-
-    /// Check whether a storage slot is cold WITHOUT loading it from the database.
-    pub fn isStorageCold(self: *Host, addr: primitives.Address, key: primitives.StorageKey) bool {
-        return self.js_vtable.isStorageCold(self.js, addr, key);
-    }
-
-    /// Check whether an address is already in the EVM state cache.
-    pub fn isAddressLoaded(self: *const Host, addr: primitives.Address) bool {
-        return self.js_vtable.isAddressLoaded(@constCast(self.js), addr);
-    }
-
-    /// Load account info. Returns null on database error.
-    pub fn accountInfo(self: *Host, addr: primitives.Address) ?struct { balance: primitives.U256, is_cold: bool, is_empty: bool } {
-        const load = self.js_vtable.accountInfo(self.js, addr) catch return null;
-        return .{
-            .balance = load.info.balance,
-            .is_cold = load.is_cold,
-            .is_empty = load.is_empty,
+        /// Result of setupCreate: either already resolved (failure) or ready to launch.
+        pub const CreateSetupResult = union(enum) {
+            failed: CreateResult,
+            ready: struct {
+                checkpoint: JournalCheckpoint,
+                new_addr: primitives.Address,
+                /// EIP-8037 (Amsterdam+): target address was alive (pre-funded) before creation.
+                target_alive: bool = false,
+            },
         };
-    }
 
-    /// Load account with code. On any database error, marks ctx_error so the block is
-    /// rejected and returns null.
-    pub fn codeInfo(self: *Host, addr: primitives.Address) ?struct { bytecode: bytecode_mod.Bytecode, code_hash: primitives.Hash, is_cold: bool } {
-        const load = self.js_vtable.loadAccountWithCode(self.js, addr) catch {
-            self.ctx_error.* = context_mod.ContextError.database_error;
-            return null;
-        };
-        const acc = load.data;
-        const code = if (acc.info.code) |c| c else bytecode_mod.Bytecode.new();
-        const code_hash = acc.info.code_hash;
-        return .{
-            .bytecode = code,
-            .code_hash = code_hash,
-            .is_cold = load.is_cold,
-        };
-    }
+        /// Performs all pre-execution steps for a CALL.
+        pub fn setupCall(self: *Self, inputs: CallInputs, frame_depth: usize) CallSetupResult {
+            return setupCallCore(DB, self.js, self, inputs, frame_depth);
+        }
 
-    /// Load account info and code in one journal lookup.
-    /// Merges accountInfo + codeInfo into a single loadAccountWithCode call,
-    /// avoiding the redundant basic-info fetch that codeInfo would otherwise repeat.
-    pub fn accountInfoWithCode(self: *Host, addr: primitives.Address) ?struct {
-        balance: primitives.U256,
-        is_cold: bool,
-        is_empty: bool,
-        bytecode: bytecode_mod.Bytecode,
-        code_hash: primitives.Hash,
-    } {
-        const load = self.js_vtable.loadAccountWithCode(self.js, addr) catch {
-            self.ctx_error.* = context_mod.ContextError.database_error;
-            return null;
-        };
-        const acc = load.data;
-        return .{
-            .balance = acc.info.balance,
-            .is_cold = load.is_cold,
-            .is_empty = acc.stateClearAwareIsEmpty(self.cfg.spec),
-            .bytecode = if (acc.info.code) |c| c else bytecode_mod.Bytecode.new(),
-            .code_hash = acc.info.code_hash,
-        };
-    }
-
-    /// Load account for EXTCODEHASH. Returns null on database error.
-    /// Uses accountInfo (no code loading) since EXTCODEHASH only needs the hash stored
-    /// in the account — it does not read or execute the bytecode itself.
-    pub fn extCodeHash(self: *Host, addr: primitives.Address) ?struct { hash: primitives.Hash, is_cold: bool, is_empty: bool } {
-        const load = self.js_vtable.accountInfo(self.js, addr) catch {
-            self.ctx_error.* = context_mod.ContextError.database_error;
-            return null;
-        };
-        return .{
-            .hash = load.info.code_hash,
-            .is_cold = load.is_cold,
-            .is_empty = load.is_empty,
-        };
-    }
-
-    pub fn sload(self: *Host, addr: primitives.Address, key: primitives.U256) ?struct { value: primitives.U256, is_cold: bool } {
-        const load = self.js_vtable.sload(self.js, addr, key) catch return null;
-        return .{ .value = load.data, .is_cold = load.is_cold };
-    }
-
-    pub fn sstore(self: *Host, addr: primitives.Address, key: primitives.U256, val: primitives.U256) ?struct { original: primitives.U256, current: primitives.U256, new: primitives.U256, is_cold: bool } {
-        const result = self.js_vtable.sstore(self.js, addr, key, val) catch return null;
-        return .{
-            .original = result.data.original_value,
-            .current = result.data.present_value,
-            .new = result.data.new_value,
-            .is_cold = result.is_cold,
-        };
-    }
-
-    pub fn tload(self: *Host, addr: primitives.Address, key: primitives.U256) primitives.U256 {
-        return self.js_vtable.tload(self.js, addr, key);
-    }
-
-    pub fn tstore(self: *Host, addr: primitives.Address, key: primitives.U256, val: primitives.U256) void {
-        self.js_vtable.tstore(self.js, addr, key, val);
-    }
-
-    pub fn emitLog(self: *Host, log_entry: primitives.Log) void {
-        self.js_vtable.emitLog(self.js, log_entry);
-    }
-
-    pub fn selfdestruct(self: *Host, addr: primitives.Address, target: primitives.Address) ?SelfDestructLoadResult {
-        const result = self.js_vtable.selfdestruct(self.js, addr, target) catch return null;
-        return .{
-            .had_value = result.data.had_value,
-            .target_exists = result.data.target_exists,
-            .previously_destroyed = result.data.previously_destroyed,
-            .is_cold = result.is_cold,
-        };
-    }
-
-    // -----------------------------------------------------------------------
-    // Sub-call dispatch: setup/finalize split for iterative frame runner
-    // -----------------------------------------------------------------------
-
-    /// Result of setupCall: either already resolved (precompile or failure),
-    /// or ready to launch a sub-frame.
-    pub const CallSetupResult = union(enum) {
-        /// Pre-execution failure (depth, value transfer, etc.): all gas returned.
-        failed: CallResult,
-        /// Precompile executed synchronously: result is final.
-        precompile: CallResult,
-        /// Sub-frame needed: checkpoint taken, code loaded, delegation_gas computed.
-        ready: struct {
+        /// Commits or reverts a call checkpoint and builds the final CallResult.
+        pub fn finalizeCall(
+            self: *Self,
             checkpoint: JournalCheckpoint,
-            code: bytecode_mod.Bytecode,
-            delegation_gas: u64,
-        },
-    };
+            result: InstructionResult,
+            gas_limit: u64,
+            gas_remaining: u64,
+            gas_refunded: i64,
+            return_data: []const u8,
+        ) CallResult {
+            return finalizeCallCore(DB, self.js, checkpoint, result, gas_limit, gas_remaining, gas_refunded, return_data);
+        }
 
-    /// Result of setupCreate: either already resolved (failure) or ready to launch.
-    pub const CreateSetupResult = union(enum) {
-        failed: CreateResult,
-        ready: struct {
+        /// Performs all pre-execution steps for a CREATE/CREATE2.
+        pub fn setupCreate(
+            self: *Self,
+            caller: primitives.Address,
+            value: primitives.U256,
+            init_code: []const u8,
+            gas_limit: u64,
+            is_create2: bool,
+            salt: primitives.U256,
+            skip_nonce_bump: bool,
+            frame_depth: usize,
+            is_opcode_create: bool,
+        ) CreateSetupResult {
+            return setupCreateCore(DB, self.js, self, caller, value, init_code, gas_limit, is_create2, salt, skip_nonce_bump, frame_depth, is_opcode_create);
+        }
+
+        /// EIP-7928 (Amsterdam+): record the create target address in the block access list
+        /// BEFORE the NEW_ACCOUNT state-gas charge (reference generic_create:
+        /// accessed_addresses.add(contract_address) precedes charge_state_gas). Read-only —
+        /// no nonce bump, collision check, or checkpoint — so a subsequent NEW_ACCOUNT OOG
+        /// still leaves the address in the BAL. Gated by the same pre-checks that make
+        /// setupCreate return without accessing the address (depth, initcode size, balance,
+        /// nonce overflow), so no phantom entries are created.
+        /// Returns whether the create target account is already alive (has balance, nonce, or
+        /// code), so the caller can skip the NEW_ACCOUNT charge (reference is_account_alive gate).
+        pub fn recordCreateTarget(
+            self: *Self,
+            caller: primitives.Address,
+            value: primitives.U256,
+            init_code: []const u8,
+            is_create2: bool,
+            salt: primitives.U256,
+            frame_depth: usize,
+        ) ?bool {
+            return recordCreateTargetCore(DB, self.js, self, caller, value, init_code, is_create2, salt, frame_depth);
+        }
+
+        /// Validates deployed code, applies deposit gas, stores bytecode, and commits/reverts.
+        pub fn finalizeCreate(
+            self: *Self,
             checkpoint: JournalCheckpoint,
             new_addr: primitives.Address,
-            /// EIP-8037 (Amsterdam+): target address was alive (pre-funded) before creation.
-            target_alive: bool = false,
-        },
+            result: InstructionResult,
+            gas_remaining: u64,
+            gas_refunded: i64,
+            return_data: []const u8,
+            spec_id: primitives.SpecId,
+            is_opcode_create: bool,
+            gas_reservoir: u64,
+        ) CreateResult {
+            return finalizeCreateCore(DB, self.js, self, checkpoint, new_addr, result, gas_remaining, gas_refunded, return_data, spec_id, is_opcode_create, gas_reservoir);
+        }
+
+        // -----------------------------------------------------------------------
+        // TEST PATH — synchronous helpers used by unit tests only.
+        // Production execution goes through executeIterative in mainnet_builder.zig,
+        // which builds the instruction table once before the frame loop.
+        // These helpers rebuild the table per call; do not use on hot paths.
+        // -----------------------------------------------------------------------
+
+        /// Synchronous CALL — runs a complete sub-frame inline. For use in tests and
+        /// simple callers that do not need the iterative frame runner.
+        pub fn call(self: *Self, inputs: CallInputs) CallResult {
+            const setup = self.setupCall(inputs, 0);
+            switch (setup) {
+                .failed => |r| return r,
+                .precompile => |r| return r,
+                .ready => |s| {
+                    const spec_id = self.cfg.spec;
+                    var sub_interp = Interpreter.new(
+                        Memory.new(),
+                        ExtBytecode.new(s.code),
+                        InputsImpl.new(inputs.caller, inputs.target, inputs.value, @constCast(inputs.data), inputs.gas_limit, inputs.scheme, inputs.is_static, 1),
+                        inputs.is_static,
+                        spec_id,
+                        inputs.gas_limit,
+                    );
+                    sub_interp.gas.reservoir = inputs.reservoir;
+                    defer sub_interp.deinit();
+                    const table = protocol_schedule.makeInstructionTable(DB, spec_id);
+                    _ = sub_interp.runWithHost(DB, &table, self);
+                    const rd: []const u8 = if (sub_interp.result.isSuccess() or sub_interp.result == .revert)
+                        sub_interp.return_data.data
+                    else
+                        &[_]u8{};
+                    var rd_buf: std.ArrayList(u8) = .empty;
+                    defer rd_buf.deinit(alloc_mod.get());
+                    rd_buf.appendSlice(alloc_mod.get(), rd) catch {};
+                    var call_result = self.finalizeCall(s.checkpoint, sub_interp.result, inputs.gas_limit, sub_interp.gas.remaining, sub_interp.gas.refunded, rd_buf.items);
+                    const sub_state_gas = sub_interp.gas.state_gas_used;
+                    const sub_reservoir = sub_interp.gas.reservoir;
+                    if (call_result.success) {
+                        call_result.state_gas_used = sub_state_gas;
+                        call_result.state_gas_remaining = sub_reservoir;
+                    } else {
+                        call_result.state_gas_used = 0;
+                        call_result.state_gas_remaining = sub_state_gas + sub_reservoir;
+                    }
+                    return call_result;
+                },
+            }
+        }
+
+        /// Synchronous CREATE/CREATE2 — runs a complete init-code frame inline. For tests only.
+        pub fn create(
+            self: *Self,
+            caller: primitives.Address,
+            value: primitives.U256,
+            init_code: []const u8,
+            gas_limit: u64,
+            is_create2: bool,
+            salt: primitives.U256,
+            skip_nonce_bump: bool,
+        ) CreateResult {
+            const setup = self.setupCreate(caller, value, init_code, gas_limit, is_create2, salt, skip_nonce_bump, 0, true);
+            switch (setup) {
+                .failed => |r| return r,
+                .ready => |s| {
+                    const spec_id = self.cfg.spec;
+                    const init_bytecode = bytecode_mod.Bytecode.newRaw(init_code);
+                    var sub_interp = Interpreter.new(
+                        Memory.new(),
+                        ExtBytecode.newOwned(init_bytecode),
+                        InputsImpl.new(caller, s.new_addr, value, @constCast(&[_]u8{}), gas_limit, .call, false, 1),
+                        false,
+                        spec_id,
+                        gas_limit,
+                    );
+                    defer sub_interp.deinit();
+                    const table = protocol_schedule.makeInstructionTable(DB, spec_id);
+                    _ = sub_interp.runWithHost(DB, &table, self);
+                    const rd: []const u8 = if (sub_interp.result.isSuccess() or sub_interp.result == .revert)
+                        sub_interp.return_data.data
+                    else
+                        &[_]u8{};
+                    var rd_buf: std.ArrayList(u8) = .empty;
+                    defer rd_buf.deinit(alloc_mod.get());
+                    rd_buf.appendSlice(alloc_mod.get(), rd) catch {};
+                    const sub_state_gas = sub_interp.gas.state_gas_used;
+                    const sub_reservoir = sub_interp.gas.reservoir;
+                    var create_result = self.finalizeCreate(s.checkpoint, s.new_addr, sub_interp.result, sub_interp.gas.remaining, sub_interp.gas.refunded, rd_buf.items, spec_id, true, sub_reservoir);
+                    if (create_result.success) {
+                        create_result.state_gas_used += sub_state_gas;
+                    } else {
+                        create_result.state_gas_remaining += sub_state_gas;
+                    }
+                    return create_result;
+                },
+            }
+        }
     };
+}
 
-    /// Performs all pre-execution steps for a CALL.
-    pub fn setupCall(self: *Host, inputs: CallInputs, frame_depth: usize) CallSetupResult {
-        return self.js_vtable.setupCall(self, inputs, frame_depth);
-    }
-
-    /// Commits or reverts a call checkpoint and builds the final CallResult.
-    pub fn finalizeCall(
-        self: *Host,
-        checkpoint: JournalCheckpoint,
-        result: InstructionResult,
-        gas_limit: u64,
-        gas_remaining: u64,
-        gas_refunded: i64,
-        return_data: []const u8,
-    ) CallResult {
-        return self.js_vtable.finalizeCall(self, checkpoint, result, gas_limit, gas_remaining, gas_refunded, return_data);
-    }
-
-    /// Performs all pre-execution steps for a CREATE/CREATE2.
-    pub fn setupCreate(
-        self: *Host,
-        caller: primitives.Address,
-        value: primitives.U256,
-        init_code: []const u8,
-        gas_limit: u64,
-        is_create2: bool,
-        salt: primitives.U256,
-        skip_nonce_bump: bool,
-        frame_depth: usize,
-        is_opcode_create: bool,
-    ) CreateSetupResult {
-        return self.js_vtable.setupCreate(self, caller, value, init_code, gas_limit, is_create2, salt, skip_nonce_bump, frame_depth, is_opcode_create);
-    }
-
-    /// EIP-7928 (Amsterdam+): record the create target address in the block access list
-    /// BEFORE the NEW_ACCOUNT state-gas charge (reference generic_create:
-    /// accessed_addresses.add(contract_address) precedes charge_state_gas). Read-only —
-    /// no nonce bump, collision check, or checkpoint — so a subsequent NEW_ACCOUNT OOG
-    /// still leaves the address in the BAL. Gated by the same pre-checks that make
-    /// setupCreate return without accessing the address (depth, initcode size, balance,
-    /// nonce overflow), so no phantom entries are created.
-    /// Returns whether the create target account is already alive (has balance, nonce, or
-    /// code), so the caller can skip the NEW_ACCOUNT charge (reference is_account_alive gate).
-    pub fn recordCreateTarget(
-        self: *Host,
-        caller: primitives.Address,
-        value: primitives.U256,
-        init_code: []const u8,
-        is_create2: bool,
-        salt: primitives.U256,
-        frame_depth: usize,
-    ) ?bool {
-        return self.js_vtable.recordCreateTarget(self, caller, value, init_code, is_create2, salt, frame_depth);
-    }
-
-    /// Validates deployed code, applies deposit gas, stores bytecode, and commits/reverts.
-    pub fn finalizeCreate(
-        self: *Host,
-        checkpoint: JournalCheckpoint,
-        new_addr: primitives.Address,
-        result: InstructionResult,
-        gas_remaining: u64,
-        gas_refunded: i64,
-        return_data: []const u8,
-        spec_id: primitives.SpecId,
-        is_opcode_create: bool,
-        gas_reservoir: u64,
-    ) CreateResult {
-        return self.js_vtable.finalizeCreate(self, checkpoint, new_addr, result, gas_remaining, gas_refunded, return_data, spec_id, is_opcode_create, gas_reservoir);
-    }
-
-    // -----------------------------------------------------------------------
-    // TEST PATH — synchronous helpers used by unit tests only.
-    // Production execution goes through executeIterative in mainnet_builder.zig,
-    // which builds the instruction table once before the frame loop.
-    // These helpers rebuild the table per call; do not use on hot paths.
-    // -----------------------------------------------------------------------
-
-    /// Synchronous CALL — runs a complete sub-frame inline. For use in tests and
-    /// simple callers that do not need the iterative frame runner.
-    pub fn call(self: *Host, inputs: CallInputs) CallResult {
-        const setup = self.setupCall(inputs, 0);
-        switch (setup) {
-            .failed => |r| return r,
-            .precompile => |r| return r,
-            .ready => |s| {
-                const spec_id = self.cfg.spec;
-                var sub_interp = Interpreter.new(
-                    Memory.new(),
-                    ExtBytecode.new(s.code),
-                    InputsImpl.new(inputs.caller, inputs.target, inputs.value, @constCast(inputs.data), inputs.gas_limit, inputs.scheme, inputs.is_static, 1),
-                    inputs.is_static,
-                    spec_id,
-                    inputs.gas_limit,
-                );
-                sub_interp.gas.reservoir = inputs.reservoir;
-                defer sub_interp.deinit();
-                const table = protocol_schedule.makeInstructionTable(spec_id);
-                _ = sub_interp.runWithHost(&table, self);
-                const rd: []const u8 = if (sub_interp.result.isSuccess() or sub_interp.result == .revert)
-                    sub_interp.return_data.data
-                else
-                    &[_]u8{};
-                var rd_buf: std.ArrayList(u8) = .empty;
-                defer rd_buf.deinit(alloc_mod.get());
-                rd_buf.appendSlice(alloc_mod.get(), rd) catch {};
-                var call_result = self.finalizeCall(s.checkpoint, sub_interp.result, inputs.gas_limit, sub_interp.gas.remaining, sub_interp.gas.refunded, rd_buf.items);
-                const sub_state_gas = sub_interp.gas.state_gas_used;
-                const sub_reservoir = sub_interp.gas.reservoir;
-                if (call_result.success) {
-                    call_result.state_gas_used = sub_state_gas;
-                    call_result.state_gas_remaining = sub_reservoir;
-                } else {
-                    call_result.state_gas_used = 0;
-                    call_result.state_gas_remaining = sub_state_gas + sub_reservoir;
-                }
-                return call_result;
-            },
-        }
-    }
-
-    /// Synchronous CREATE/CREATE2 — runs a complete init-code frame inline. For tests only.
-    pub fn create(
-        self: *Host,
-        caller: primitives.Address,
-        value: primitives.U256,
-        init_code: []const u8,
-        gas_limit: u64,
-        is_create2: bool,
-        salt: primitives.U256,
-        skip_nonce_bump: bool,
-    ) CreateResult {
-        const setup = self.setupCreate(caller, value, init_code, gas_limit, is_create2, salt, skip_nonce_bump, 0, true);
-        switch (setup) {
-            .failed => |r| return r,
-            .ready => |s| {
-                const spec_id = self.cfg.spec;
-                const init_bytecode = bytecode_mod.Bytecode.newRaw(init_code);
-                var sub_interp = Interpreter.new(
-                    Memory.new(),
-                    ExtBytecode.newOwned(init_bytecode),
-                    InputsImpl.new(caller, s.new_addr, value, @constCast(&[_]u8{}), gas_limit, .call, false, 1),
-                    false,
-                    spec_id,
-                    gas_limit,
-                );
-                defer sub_interp.deinit();
-                const table = protocol_schedule.makeInstructionTable(spec_id);
-                _ = sub_interp.runWithHost(&table, self);
-                const rd: []const u8 = if (sub_interp.result.isSuccess() or sub_interp.result == .revert)
-                    sub_interp.return_data.data
-                else
-                    &[_]u8{};
-                var rd_buf: std.ArrayList(u8) = .empty;
-                defer rd_buf.deinit(alloc_mod.get());
-                rd_buf.appendSlice(alloc_mod.get(), rd) catch {};
-                const sub_state_gas = sub_interp.gas.state_gas_used;
-                const sub_reservoir = sub_interp.gas.reservoir;
-                var create_result = self.finalizeCreate(s.checkpoint, s.new_addr, sub_interp.result, sub_interp.gas.remaining, sub_interp.gas.refunded, rd_buf.items, spec_id, true, sub_reservoir);
-                if (create_result.success) {
-                    create_result.state_gas_used += sub_state_gas;
-                } else {
-                    create_result.state_gas_remaining += sub_state_gas;
-                }
-                return create_result;
-            },
-        }
-    }
-};
+/// Convenience constructor for the default InMemoryDB context. Kept outside
+/// Host(DB) since its `ctx` parameter type is concretely `Context(InMemoryDB)`
+/// and would not typecheck as a generic Host(DB) method for other DB types.
+pub fn fromCtx(ctx: *context_mod.DefaultContext, prec: ?*const precompile_mod.Precompiles) Host(database_mod.InMemoryDB) {
+    return Host(database_mod.InMemoryDB).init(ctx, prec);
+}
 
 // ─── Core implementations (anytype journal — shared across DB types) ─────────
 
-/// Core logic for setupCall. The journal `js` is anytype so the same code is
-/// reused across all DB-typed vtable instantiations.
-fn setupCallCore(js: anytype, host: *Host, inputs: CallInputs, frame_depth: usize) Host.CallSetupResult {
+/// Core logic for setupCall. `js`/`host` are concretely typed once DB is bound,
+/// so this compiles to direct calls; the function itself is still shared across
+/// all DB instantiations since it's a plain generic function.
+fn setupCallCore(comptime DB: type, js: *context_mod.Journal(DB), host: *Host(DB), inputs: CallInputs, frame_depth: usize) Host(DB).CallSetupResult {
     const MAX_CALL_DEPTH = 1024;
 
     // 1. Depth check
@@ -794,7 +694,7 @@ fn setupCallCore(js: anytype, host: *Host, inputs: CallInputs, frame_depth: usiz
 }
 
 /// Core logic for finalizeCall.
-fn finalizeCallCore(js: anytype, checkpoint: JournalCheckpoint, result: InstructionResult, gas_limit: u64, gas_remaining: u64, gas_refunded: i64, return_data: []const u8) CallResult {
+fn finalizeCallCore(comptime DB: type, js: *context_mod.Journal(DB), checkpoint: JournalCheckpoint, result: InstructionResult, gas_limit: u64, gas_remaining: u64, gas_refunded: i64, return_data: []const u8) CallResult {
     if (result.isSuccess()) {
         js.checkpointCommit();
     } else {
@@ -820,8 +720,9 @@ fn finalizeCallCore(js: anytype, checkpoint: JournalCheckpoint, result: Instruct
 /// NEW_ACCOUNT charge. Mirrors setupCreateCore's pre-checks so it only records when
 /// setupCreate would actually reach the address access — no nonce bump / checkpoint.
 fn recordCreateTargetCore(
-    js: anytype,
-    host: *Host,
+    comptime DB: type,
+    js: *context_mod.Journal(DB),
+    host: *Host(DB),
     caller: primitives.Address,
     value: primitives.U256,
     init_code: []const u8,
@@ -856,8 +757,9 @@ fn recordCreateTargetCore(
 }
 
 fn setupCreateCore(
-    js: anytype,
-    host: *Host,
+    comptime DB: type,
+    js: *context_mod.Journal(DB),
+    host: *Host(DB),
     caller: primitives.Address,
     value: primitives.U256,
     init_code: []const u8,
@@ -867,7 +769,7 @@ fn setupCreateCore(
     skip_nonce_bump: bool,
     frame_depth: usize,
     is_opcode_create: bool,
-) Host.CreateSetupResult {
+) Host(DB).CreateSetupResult {
     const MAX_CALL_DEPTH = 1024;
     const spec_id = host.cfg.spec;
 
@@ -969,8 +871,9 @@ fn setupCreateCore(
 
 /// Core logic for finalizeCreate.
 fn finalizeCreateCore(
-    js: anytype,
-    host: *Host,
+    comptime DB: type,
+    js: *context_mod.Journal(DB),
+    host: *Host(DB),
     checkpoint: JournalCheckpoint,
     new_addr: primitives.Address,
     result: InstructionResult,

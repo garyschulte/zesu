@@ -1,11 +1,14 @@
 const std = @import("std");
 const primitives = @import("primitives");
+const database = @import("database");
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const InstructionContext = @import("../instruction_context.zig").InstructionContext;
 const Gas = @import("../gas.zig").Gas;
 const keccak_ops = @import("keccak.zig");
 
-const opKeccak256 = keccak_ops.opKeccak256;
+/// No host needed in these tests — bind the dispatch table to any concrete DB.
+const TestDB = database.InMemoryDB;
+const opKeccak256 = keccak_ops.Ops(TestDB).opKeccak256;
 
 const expectEqual = std.testing.expectEqual;
 const expect = std.testing.expect;
@@ -17,7 +20,7 @@ test "KECCAK256: empty input" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0)); // length 0
     interp.stack.pushUnsafe(@as(U, 0)); // offset 0
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opKeccak256(&ctx);
     try expect(interp.bytecode.continue_execution);
     // Keccak256("") = 0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
@@ -32,7 +35,7 @@ test "KECCAK256: single byte" {
     interp.memory.buffer.items[0] = 0x00;
     interp.stack.pushUnsafe(@as(U, 1)); // length 1
     interp.stack.pushUnsafe(@as(U, 0)); // offset 0
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opKeccak256(&ctx);
     try expect(interp.bytecode.continue_execution);
     // Keccak256(0x00) = 0xbc36789e7a1e281436464229828f817d6612f7b477d66591ff96a9e064bcc98a
@@ -47,7 +50,7 @@ test "KECCAK256: hello" {
     @memcpy(interp.memory.buffer.items[0..hello.len], hello);
     interp.stack.pushUnsafe(@as(U, 5)); // length 5
     interp.stack.pushUnsafe(@as(U, 0)); // offset 0
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opKeccak256(&ctx);
     // Keccak256("hello") = 0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8
     const expected: U = 0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8;
@@ -64,7 +67,7 @@ test "KECCAK256: dynamic word gas (64 bytes = 2 words = 12 gas)" {
     while (i < 64) : (i += 1) interp.memory.buffer.items[i] = @as(u8, @intCast(i));
     interp.stack.pushUnsafe(@as(U, 64)); // length 64
     interp.stack.pushUnsafe(@as(U, 0)); // offset 0
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opKeccak256(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(u64, 988), interp.gas.remaining); // 1000 - 12
@@ -76,7 +79,7 @@ test "KECCAK256: dynamic word gas (100 bytes = ceil(100/32)=4 words = 24 gas)" {
     try interp.memory.buffer.resize(std.heap.c_allocator, 100);
     interp.stack.pushUnsafe(@as(U, 100));
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opKeccak256(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(u64, 976), interp.gas.remaining); // 1000 - 24
@@ -88,7 +91,7 @@ test "KECCAK256: auto-expands memory" {
     // Memory is empty, but we hash 32 bytes at offset 0
     interp.stack.pushUnsafe(@as(U, 32)); // length 32
     interp.stack.pushUnsafe(@as(U, 0)); // offset 0
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opKeccak256(&ctx);
     try expect(interp.bytecode.continue_execution);
     // Memory should have been expanded to at least 32 bytes
@@ -102,7 +105,7 @@ test "KECCAK256: out of gas on word cost" {
     try interp.memory.buffer.resize(std.heap.c_allocator, 32);
     interp.stack.pushUnsafe(@as(U, 32)); // 1 word
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opKeccak256(&ctx);
     try expect(!interp.bytecode.continue_execution);
     try expectEqual(.out_of_gas, interp.result);
@@ -111,7 +114,7 @@ test "KECCAK256: out of gas on word cost" {
 test "KECCAK256: stack underflow" {
     var interp = Interpreter.defaultExt();
     interp.stack.pushUnsafe(@as(U, 0)); // only 1 value, need 2
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opKeccak256(&ctx);
     try expectEqual(.stack_underflow, interp.result);
 }
@@ -124,7 +127,7 @@ test "KECCAK256: deterministic" {
     @memcpy(interp1.memory.buffer.items[0..data.len], data);
     interp1.stack.pushUnsafe(@as(U, 4));
     interp1.stack.pushUnsafe(@as(U, 0));
-    var ctx1 = InstructionContext{ .interpreter = &interp1 };
+    var ctx1 = InstructionContext(TestDB){ .interpreter = &interp1 };
     opKeccak256(&ctx1);
     const hash1 = interp1.stack.popUnsafe();
 
@@ -133,7 +136,7 @@ test "KECCAK256: deterministic" {
     @memcpy(interp2.memory.buffer.items[0..data.len], data);
     interp2.stack.pushUnsafe(@as(U, 4));
     interp2.stack.pushUnsafe(@as(U, 0));
-    var ctx2 = InstructionContext{ .interpreter = &interp2 };
+    var ctx2 = InstructionContext(TestDB){ .interpreter = &interp2 };
     opKeccak256(&ctx2);
     const hash2 = interp2.stack.popUnsafe();
 

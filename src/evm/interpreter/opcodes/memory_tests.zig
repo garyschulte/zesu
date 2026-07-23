@@ -1,15 +1,19 @@
 const std = @import("std");
 const primitives = @import("primitives");
+const database = @import("database");
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const InstructionContext = @import("../instruction_context.zig").InstructionContext;
 const Gas = @import("../gas.zig").Gas;
 const memory_ops = @import("memory.zig");
 
-const opMload = memory_ops.opMload;
-const opMstore = memory_ops.opMstore;
-const opMstore8 = memory_ops.opMstore8;
-const opMsize = memory_ops.opMsize;
-const opMcopy = memory_ops.opMcopy;
+/// No host needed in these tests — bind the dispatch table to any concrete DB.
+const TestDB = database.InMemoryDB;
+const ops = memory_ops.Ops(TestDB);
+const opMload = ops.opMload;
+const opMstore = ops.opMstore;
+const opMstore8 = ops.opMstore8;
+const opMsize = ops.opMsize;
+const opMcopy = ops.opMcopy;
 
 const expectEqual = std.testing.expectEqual;
 const expect = std.testing.expect;
@@ -23,7 +27,7 @@ test "MLOAD: load from offset 0" {
     try interp.memory.buffer.resize(std.heap.c_allocator, 64);
     @memset(interp.memory.buffer.items[0..32], 0x42);
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMload(&ctx);
     try expect(interp.bytecode.continue_execution);
     // Load 32 bytes of 0x42 as big-endian U256
@@ -37,7 +41,7 @@ test "MLOAD: auto-expands memory" {
     var interp = Interpreter.defaultExt();
     defer interp.memory.deinit();
     interp.stack.pushUnsafe(@as(U, 32)); // load from offset 32
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMload(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(usize, 64), interp.memory.size());
@@ -48,7 +52,7 @@ test "MLOAD: memory expansion charges gas" {
     defer interp.memory.deinit();
     interp.gas = Gas.new(1000);
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMload(&ctx);
     // Memory expansion from 0 to 32 bytes (1 word): cost = 1*3 + 1/512 = 3
     try expectEqual(@as(u64, 997), interp.gas.remaining);
@@ -57,7 +61,7 @@ test "MLOAD: memory expansion charges gas" {
 test "MLOAD: stack underflow" {
     var interp = Interpreter.defaultExt();
     defer interp.memory.deinit();
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMload(&ctx);
     try expectEqual(.stack_underflow, interp.result);
 }
@@ -67,7 +71,7 @@ test "MLOAD: out of gas on memory expansion" {
     defer interp.memory.deinit();
     interp.gas = Gas.new(0); // zero gas, expansion costs at least 3
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMload(&ctx);
     try expectEqual(.out_of_gas, interp.result);
 }
@@ -79,7 +83,7 @@ test "MSTORE: store 32 bytes" {
     defer interp.memory.deinit();
     interp.stack.pushUnsafe(@as(U, 0x123456789ABCDEF)); // value
     interp.stack.pushUnsafe(@as(U, 0)); // offset
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMstore(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(usize, 32), interp.memory.size());
@@ -93,7 +97,7 @@ test "MSTORE: expand memory to cover offset + 32" {
     defer interp.memory.deinit();
     interp.stack.pushUnsafe(@as(U, 42)); // value
     interp.stack.pushUnsafe(@as(U, 64)); // offset 64
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMstore(&ctx);
     try expectEqual(@as(usize, 96), interp.memory.size());
 }
@@ -104,7 +108,7 @@ test "MSTORE: overwrite existing data" {
     // First store
     interp.stack.pushUnsafe(@as(U, 0xFF));
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMstore(&ctx);
     // Second store (overwrite)
     interp.stack.pushUnsafe(@as(U, 0xAA));
@@ -117,7 +121,7 @@ test "MSTORE: stack underflow" {
     var interp = Interpreter.defaultExt();
     defer interp.memory.deinit();
     interp.stack.pushUnsafe(@as(U, 0)); // only 1 value, need 2
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMstore(&ctx);
     try expectEqual(.stack_underflow, interp.result);
 }
@@ -129,7 +133,7 @@ test "MSTORE8: store lowest byte" {
     defer interp.memory.deinit();
     interp.stack.pushUnsafe(@as(U, 0x12345)); // only 0x45 stored
     interp.stack.pushUnsafe(@as(U, 10)); // offset 10
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMstore8(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(u8, 0x45), interp.memory.buffer.items[10]);
@@ -140,7 +144,7 @@ test "MSTORE8: only lowest byte (large value)" {
     defer interp.memory.deinit();
     interp.stack.pushUnsafe(@as(U, 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF42));
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMstore8(&ctx);
     try expectEqual(@as(u8, 0x42), interp.memory.buffer.items[0]);
 }
@@ -150,7 +154,7 @@ test "MSTORE8: auto-expands memory" {
     defer interp.memory.deinit();
     interp.stack.pushUnsafe(@as(U, 0xFF));
     interp.stack.pushUnsafe(@as(U, 100)); // offset 100
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMstore8(&ctx);
     try expectEqual(@as(usize, 128), interp.memory.size()); // EVM memory is 32-byte aligned: ceil(101/32)*32 = 128
 }
@@ -160,7 +164,7 @@ test "MSTORE8: auto-expands memory" {
 test "MSIZE: empty memory = 0" {
     var interp = Interpreter.defaultExt();
     defer interp.memory.deinit();
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMsize(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(U, 0), interp.stack.popUnsafe());
@@ -170,7 +174,7 @@ test "MSIZE: after expansion" {
     var interp = Interpreter.defaultExt();
     defer interp.memory.deinit();
     try interp.memory.buffer.resize(std.heap.c_allocator, 128);
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMsize(&ctx);
     try expectEqual(@as(U, 128), interp.stack.popUnsafe());
 }
@@ -180,7 +184,7 @@ test "MSIZE: stack overflow" {
     defer interp.memory.deinit();
     var i: usize = 0;
     while (i < 1024) : (i += 1) interp.stack.pushUnsafe(@as(U, i));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMsize(&ctx);
     try expectEqual(.stack_overflow, interp.result);
 }
@@ -197,7 +201,7 @@ test "MCOPY: basic copy" {
     interp.stack.pushUnsafe(@as(U, 32)); // length
     interp.stack.pushUnsafe(@as(U, 0)); // src
     interp.stack.pushUnsafe(@as(U, 32)); // dest
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMcopy(&ctx);
     try expect(interp.bytecode.continue_execution);
     try expectEqual(@as(u8, 0xAB), interp.memory.buffer.items[32]);
@@ -213,7 +217,7 @@ test "MCOPY: overlapping regions (forward)" {
     interp.stack.pushUnsafe(@as(U, 10)); // length
     interp.stack.pushUnsafe(@as(U, 5)); // src
     interp.stack.pushUnsafe(@as(U, 0)); // dest
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMcopy(&ctx);
     try expect(interp.bytecode.continue_execution);
     // dest[0] should be original src[5] = 5
@@ -225,7 +229,7 @@ test "MCOPY: stack underflow" {
     defer interp.memory.deinit();
     interp.stack.pushUnsafe(@as(U, 0));
     interp.stack.pushUnsafe(@as(U, 0));
-    var ctx = InstructionContext{ .interpreter = &interp };
+    var ctx = InstructionContext(TestDB){ .interpreter = &interp };
     opMcopy(&ctx); // only 2 items, need 3
     try expectEqual(.stack_underflow, interp.result);
 }
