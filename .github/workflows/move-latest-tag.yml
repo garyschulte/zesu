@@ -1,0 +1,32 @@
+name: Move latest tag
+
+# Keeps the `latest` tag pointing at the tip of main: on every push to main
+# (i.e. every merge), force-move the tag to the pushed commit.
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+# Serialize so a slower, older run can never move the tag backwards.
+concurrency:
+  group: move-latest-tag
+  cancel-in-progress: false
+
+jobs:
+  move-tag:
+    name: Move latest tag to main
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Force-move latest tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f latest "$GITHUB_SHA"
+          git push --force origin refs/tags/latest
