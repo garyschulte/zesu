@@ -182,6 +182,10 @@ pub fn executeBlockFromAlloc(
 /// `parent_header`: parent block's gas/basefee/blob-gas fields, decoded by the caller
 /// from the witness header whose hash equals `ep.parent_hash`. Used to enforce the
 /// EIP-1559 basefee and EIP-4844 excess-blob-gas checks. Pass `null` to skip them.
+///
+/// `node_index`: updated with the nodes of this block's post-state. To reuse one index across
+/// consecutive blocks, build it with mpt.buildNodeIndexRetaining so those nodes survive the
+/// state-root computation; an index from mpt.buildNodeIndex is only valid for this one block.
 pub fn executeBlockStateless(
     alloc: std.mem.Allocator,
     pre_state_root: [32]u8,

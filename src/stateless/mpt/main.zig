@@ -58,33 +58,76 @@ pub fn keccak256(data: []const u8) [32]u8 {
 /// Pre-computed hash → node-bytes map built once from the witness node pool.
 /// Use buildNodeIndex() to populate, then pass to the *Indexed verification
 /// functions for O(1) node lookups instead of O(N·keccak) linear scans.
-pub const NodeIndex = std.HashMap([32]u8, []const u8, primitives.HashContext, 80);
+///
+/// The update functions (batchUpdateIndexed, updateAccountChainedIndexed, ...) insert the
+/// nodes they create so later lookups can find them. Who owns those bytes is fixed when
+/// the index is built:
+///   - init / buildNodeIndex: borrowed. The entry aliases the updater's allocation, so it
+///     is only valid while that allocator is. Fine when the index is discarded with the
+///     block (the update's scratch arena may be freed first); never read such an entry
+///     after the allocator that produced it is freed.
+///   - initRetaining / buildNodeIndexRetaining: the index copies each inserted node into
+///     `retain`, so entries stay valid across updates (e.g. one index shared by
+///     consecutive blocks). `retain` must outlive the index and is expected to be
+///     arena-like: deinit() frees the map only, not the copied nodes.
+/// Existing entries are never replaced, so a witness-backed slice is not swapped for a
+/// scratch copy of the same node (the key is the node's hash, so the bytes are equal).
+pub const NodeIndex = struct {
+    map: Map,
+    retain: ?std.mem.Allocator,
 
-/// Insert `node_rlp` into `index`, copying it into `persist` if non-null.
-/// Existing entries are kept, so a witness-backed slice is never replaced by scratch bytes.
-fn indexPut(
-    index: *NodeIndex,
-    persist: ?std.mem.Allocator,
-    h: [32]u8,
-    node_rlp: []const u8,
-) error{OutOfMemory}!void {
-    const gop = try index.getOrPut(h);
-    if (gop.found_existing) return;
-    gop.value_ptr.* = if (persist) |a| a.dupe(u8, node_rlp) catch |err| {
-        _ = index.remove(h);
-        return err;
-    } else node_rlp;
-}
+    const Map = std.HashMap([32]u8, []const u8, primitives.HashContext, 80);
 
-/// Build a NodeIndex from a flat node pool.
+    pub fn init(allocator: std.mem.Allocator) NodeIndex {
+        return .{ .map = Map.init(allocator), .retain = null };
+    }
+
+    pub fn initRetaining(allocator: std.mem.Allocator, retain: std.mem.Allocator) NodeIndex {
+        return .{ .map = Map.init(allocator), .retain = retain };
+    }
+
+    pub fn deinit(self: *NodeIndex) void {
+        self.map.deinit();
+    }
+
+    pub fn get(self: *const NodeIndex, h: [32]u8) ?[]const u8 {
+        return self.map.get(h);
+    }
+
+    pub fn count(self: *const NodeIndex) usize {
+        return self.map.count();
+    }
+
+    /// Insert `node_rlp` under its hash `h`, copying it into `retain` when set.
+    pub fn put(self: *NodeIndex, h: [32]u8, node_rlp: []const u8) error{OutOfMemory}!void {
+        const gop = try self.map.getOrPut(h);
+        if (gop.found_existing) return;
+        gop.value_ptr.* = if (self.retain) |a| a.dupe(u8, node_rlp) catch |err| {
+            _ = self.map.remove(h);
+            return err;
+        } else node_rlp;
+    }
+};
+
+/// Build a NodeIndex from a flat node pool; inserted nodes are borrowed (see NodeIndex).
 /// Each entry maps keccak256(node_bytes) → node_bytes.
 /// The returned map is owned by the caller; call deinit() when done.
 pub fn buildNodeIndex(allocator: std.mem.Allocator, pool: []const []const u8) !NodeIndex {
-    var index = NodeIndex.init(allocator);
-    try index.ensureTotalCapacity(@intCast(pool.len));
+    return fillNodeIndex(NodeIndex.init(allocator), pool);
+}
+
+/// Like buildNodeIndex, but nodes inserted by later updates are copied into `retain`.
+pub fn buildNodeIndexRetaining(allocator: std.mem.Allocator, retain: std.mem.Allocator, pool: []const []const u8) !NodeIndex {
+    return fillNodeIndex(NodeIndex.initRetaining(allocator, retain), pool);
+}
+
+fn fillNodeIndex(empty: NodeIndex, pool: []const []const u8) !NodeIndex {
+    var index = empty;
+    errdefer index.deinit();
+    try index.map.ensureTotalCapacity(@intCast(pool.len));
     for (pool) |node_bytes| {
         const h = keccak256(node_bytes);
-        index.putAssumeCapacity(h, node_bytes);
+        index.map.putAssumeCapacity(h, node_bytes);
     }
     return index;
 }
@@ -709,19 +752,19 @@ pub fn updateAccountChainedIndexed(
         if (account_rlp) |val| {
             const leaf_rlp = try updMakeLeaf(alloc, &key_nibs, val);
             const h = keccak256(leaf_rlp);
-            try indexPut(index, null, h, leaf_rlp);
+            try index.put(h, leaf_rlp);
             root.* = h;
         }
         return;
     }
 
     const root_bytes = findNodeInIndex(index, root.*) orelse return error.InvalidProof;
-    const new_root_rlp = try updNodeExIndexed(alloc, null, root_bytes, &key_nibs, account_rlp, index);
+    const new_root_rlp = try updNodeExIndexed(alloc, root_bytes, &key_nibs, account_rlp, index);
     root.* = if (new_root_rlp.len == 1 and new_root_rlp[0] == 0x80)
         EMPTY_TRIE_HASH
     else blk: {
         const h = keccak256(new_root_rlp);
-        try indexPut(index, null, h, new_root_rlp);
+        try index.put(h, new_root_rlp);
         break :blk h;
     };
 }
@@ -747,19 +790,19 @@ pub fn updateStorageChainedIndexed(
         if (new_val_enc) |val| {
             const leaf_rlp = try updMakeLeaf(alloc, &key_nibs, val);
             const h = keccak256(leaf_rlp);
-            try indexPut(index, null, h, leaf_rlp);
+            try index.put(h, leaf_rlp);
             root.* = h;
         }
         return;
     }
 
     const root_bytes = findNodeInIndex(index, root.*) orelse return error.InvalidProof;
-    const new_root_rlp = try updNodeExIndexed(alloc, null, root_bytes, &key_nibs, new_val_enc, index);
+    const new_root_rlp = try updNodeExIndexed(alloc, root_bytes, &key_nibs, new_val_enc, index);
     root.* = if (new_root_rlp.len == 1 and new_root_rlp[0] == 0x80)
         EMPTY_TRIE_HASH
     else blk: {
         const h = keccak256(new_root_rlp);
-        try indexPut(index, null, h, new_root_rlp);
+        try index.put(h, new_root_rlp);
         break :blk h;
     };
 }
@@ -777,11 +820,8 @@ pub const BatchChange = struct {
 /// Batch-update a trie with multiple pre-sorted changes, visiting each branch node once.
 /// `sorted_changes` must be sorted ascending by `key`.
 /// Returns the new root hash.
-/// Nodes inserted into `index` are copied into `persist` so `index` stays valid
-/// after `alloc` is freed. If `persist` is null, `alloc` must outlive `index`.
 pub fn batchUpdateIndexed(
     alloc: std.mem.Allocator,
-    persist: ?std.mem.Allocator,
     root: [32]u8,
     sorted_changes: []const BatchChange,
     index: *NodeIndex,
@@ -791,7 +831,7 @@ pub fn batchUpdateIndexed(
         &.{0x80}
     else
         findNodeInIndex(index, root) orelse return error.InvalidProof;
-    const new_root_rlp = try batchUpdateNodeIndexed(alloc, persist, root_rlp, sorted_changes, 0, index);
+    const new_root_rlp = try batchUpdateNodeIndexed(alloc, root_rlp, sorted_changes, 0, index);
     return commitRoot(new_root_rlp);
 }
 
@@ -806,7 +846,6 @@ inline fn nibbleAt(key: *const [32]u8, depth: u8) u8 {
 
 fn batchUpdateNodeIndexed(
     alloc: std.mem.Allocator,
-    persist: ?std.mem.Allocator,
     node_rlp: []const u8,
     changes: []const BatchChange,
     depth: u8,
@@ -821,7 +860,7 @@ fn batchUpdateNodeIndexed(
         return if (changes[0].value != null)
             updNodeExBatch(alloc, node_rlp, key_nibs[depth..], changes[0].value, index)
         else
-            updNodeExIndexed(alloc, persist, node_rlp, key_nibs[depth..], changes[0].value, index);
+            updNodeExIndexed(alloc, node_rlp, key_nibs[depth..], changes[0].value, index);
     }
 
     // Empty subtree with multiple inserts: build sequentially.
@@ -832,7 +871,7 @@ fn batchUpdateNodeIndexed(
         for (changes) |ch| {
             var key_nibs: [64]u8 = undefined;
             nibbles.bytesToNibbles(&ch.key, &key_nibs);
-            current = try updNodeExIndexed(alloc, persist, current, key_nibs[depth..], ch.value, index);
+            current = try updNodeExIndexed(alloc, current, key_nibs[depth..], ch.value, index);
         }
         return current;
     }
@@ -866,9 +905,9 @@ fn batchUpdateNodeIndexed(
                     .hash => |h| findNodeInIndex(index, h.*) orelse return error.InvalidProof,
                     .inline_node => |il| il,
                 };
-                const new_child_rlp = try batchUpdateNodeIndexed(alloc, persist, child_rlp, changes[i..j], depth + 1, index);
+                const new_child_rlp = try batchUpdateNodeIndexed(alloc, child_rlp, changes[i..j], depth + 1, index);
                 enc[nib] = if (has_deletion)
-                    try updHashOrEmbedExIndexed(alloc, persist, new_child_rlp, index)
+                    try updHashOrEmbedExIndexed(alloc, new_child_rlp, index)
                 else
                     try updHashOrEmbed(alloc, new_child_rlp);
                 i = j;
@@ -903,7 +942,7 @@ fn batchUpdateNodeIndexed(
             for (changes) |ch| {
                 var key_nibs: [64]u8 = undefined;
                 nibbles.bytesToNibbles(&ch.key, &key_nibs);
-                current = try updNodeExIndexed(alloc, persist, current, key_nibs[depth..], ch.value, index);
+                current = try updNodeExIndexed(alloc, current, key_nibs[depth..], ch.value, index);
             }
             return current;
         },
@@ -935,7 +974,6 @@ fn updResolveRefExIndexed(ref: node.NodeRef, index: *const NodeIndex) MptError![
 fn updNodeExImpl(
     comptime store_in_index: bool,
     alloc: std.mem.Allocator,
-    persist: ?std.mem.Allocator,
     node_rlp: []const u8,
     remaining: []const u8,
     new_val: ?[]const u8,
@@ -960,8 +998,8 @@ fn updNodeExImpl(
             }
             const nib = remaining[0];
             const child_rlp = try updResolveRefExIndexed(b.children[nib], index);
-            const new_child_rlp = try updNodeExImpl(store_in_index, alloc, persist, child_rlp, remaining[1..], new_val, index);
-            const new_child_enc = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, persist, new_child_rlp, index) else try updHashOrEmbed(alloc, new_child_rlp);
+            const new_child_rlp = try updNodeExImpl(store_in_index, alloc, child_rlp, remaining[1..], new_val, index);
+            const new_child_enc = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, new_child_rlp, index) else try updHashOrEmbed(alloc, new_child_rlp);
             var enc: [16][]const u8 = undefined;
             for (b.children, 0..) |child, i| enc[i] = refEncSlice(node_rlp, child);
             enc[nib] = new_child_enc;
@@ -996,7 +1034,7 @@ fn updNodeExImpl(
 
             if (cp == prefix.len) {
                 const child_rlp = try updResolveRefExIndexed(e.child, index);
-                const new_child_rlp = try updNodeExImpl(store_in_index, alloc, persist, child_rlp, remaining[cp..], new_val, index);
+                const new_child_rlp = try updNodeExImpl(store_in_index, alloc, child_rlp, remaining[cp..], new_val, index);
                 if (new_child_rlp.len == 1 and new_child_rlp[0] == 0x80)
                     return &EMPTY_NODE_RLP;
 
@@ -1025,7 +1063,7 @@ fn updNodeExImpl(
                     }
                 }
 
-                const new_child_ref = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, persist, new_child_rlp, index) else try updHashOrEmbed(alloc, new_child_rlp);
+                const new_child_ref = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, new_child_rlp, index) else try updHashOrEmbed(alloc, new_child_rlp);
                 return updMakeExtension(alloc, prefix, new_child_ref);
             }
 
@@ -1043,7 +1081,7 @@ fn updNodeExImpl(
             const old_nib = prefix[cp];
             if (cp + 1 < prefix.len) {
                 const ext_rlp = try updMakeExtension(alloc, prefix[cp + 1 ..], try updRefEnc(alloc, e.child));
-                children_enc[old_nib] = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, persist, ext_rlp, index) else try updHashOrEmbed(alloc, ext_rlp);
+                children_enc[old_nib] = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, ext_rlp, index) else try updHashOrEmbed(alloc, ext_rlp);
             } else {
                 children_enc[old_nib] = try updRefEnc(alloc, e.child);
             }
@@ -1051,14 +1089,14 @@ fn updNodeExImpl(
                 if (cp < remaining.len) {
                     const new_nib = remaining[cp];
                     const leaf_rlp = try updMakeLeaf(alloc, remaining[cp + 1 ..], val);
-                    children_enc[new_nib] = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, persist, leaf_rlp, index) else try updHashOrEmbed(alloc, leaf_rlp);
+                    children_enc[new_nib] = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, leaf_rlp, index) else try updHashOrEmbed(alloc, leaf_rlp);
                 } else {
                     branch_val = val;
                 }
             }
             const branch_rlp = try updEncodeBranch(alloc, &children_enc, branch_val);
             if (cp == 0) return branch_rlp;
-            const branch_ref = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, persist, branch_rlp, index) else try updHashOrEmbed(alloc, branch_rlp);
+            const branch_ref = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, branch_rlp, index) else try updHashOrEmbed(alloc, branch_rlp);
             return updMakeExtension(alloc, prefix[0..cp], branch_ref);
         },
 
@@ -1085,20 +1123,20 @@ fn updNodeExImpl(
             if (cp < suffix.len) {
                 const old_nib = suffix[cp];
                 const old_leaf_rlp = try updMakeLeaf(alloc, suffix[cp + 1 ..], lf.value);
-                children_enc[old_nib] = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, persist, old_leaf_rlp, index) else try updHashOrEmbed(alloc, old_leaf_rlp);
+                children_enc[old_nib] = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, old_leaf_rlp, index) else try updHashOrEmbed(alloc, old_leaf_rlp);
             } else {
                 branch_val = lf.value;
             }
             if (cp < remaining.len) {
                 const new_nib = remaining[cp];
                 const new_leaf_rlp = try updMakeLeaf(alloc, remaining[cp + 1 ..], new_val.?);
-                children_enc[new_nib] = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, persist, new_leaf_rlp, index) else try updHashOrEmbed(alloc, new_leaf_rlp);
+                children_enc[new_nib] = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, new_leaf_rlp, index) else try updHashOrEmbed(alloc, new_leaf_rlp);
             } else {
                 branch_val = new_val.?;
             }
             const branch_rlp = try updEncodeBranch(alloc, &children_enc, branch_val);
             if (cp == 0) return branch_rlp;
-            const branch_ref = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, persist, branch_rlp, index) else try updHashOrEmbed(alloc, branch_rlp);
+            const branch_ref = if (comptime store_in_index) try updHashOrEmbedExIndexed(alloc, branch_rlp, index) else try updHashOrEmbed(alloc, branch_rlp);
             return updMakeExtension(alloc, suffix[0..cp], branch_ref);
         },
     }
@@ -1106,13 +1144,12 @@ fn updNodeExImpl(
 
 fn updNodeExIndexed(
     alloc: std.mem.Allocator,
-    persist: ?std.mem.Allocator,
     node_rlp: []const u8,
     remaining: []const u8,
     new_val: ?[]const u8,
     index: *NodeIndex,
 ) (MptError || error{OutOfMemory})![]const u8 {
-    return updNodeExImpl(true, alloc, persist, node_rlp, remaining, new_val, index);
+    return updNodeExImpl(true, alloc, node_rlp, remaining, new_val, index);
 }
 
 fn updNodeExBatch(
@@ -1122,7 +1159,7 @@ fn updNodeExBatch(
     new_val: ?[]const u8,
     index: *NodeIndex,
 ) (MptError || error{OutOfMemory})![]const u8 {
-    return updNodeExImpl(false, alloc, null, node_rlp, remaining, new_val, index);
+    return updNodeExImpl(false, alloc, node_rlp, remaining, new_val, index);
 }
 
 /// Recursively update a node and return its new RLP bytes.
@@ -1673,10 +1710,10 @@ fn updHashOrEmbedEx(alloc: std.mem.Allocator, node_rlp: []const u8, extra: *std.
 }
 
 /// Like updHashOrEmbedEx but inserts the new node directly into the shared NodeIndex.
-fn updHashOrEmbedExIndexed(alloc: std.mem.Allocator, persist: ?std.mem.Allocator, node_rlp: []const u8, index: *NodeIndex) ![]const u8 {
+fn updHashOrEmbedExIndexed(alloc: std.mem.Allocator, node_rlp: []const u8, index: *NodeIndex) ![]const u8 {
     if (node_rlp.len < 32) return node_rlp;
     const h = keccak256(node_rlp);
-    try indexPut(index, persist, h, node_rlp);
+    try index.put(h, node_rlp);
     return updRlpBytes(alloc, &h);
 }
 
@@ -1915,7 +1952,7 @@ test "updNodeExIndexed: deleting non-existent key (diverges from extension prefi
     const alloc = arena.allocator();
     const ext = try buildTestExtTrie(alloc);
     var index = NodeIndex.init(alloc);
-    const result = try updNodeExIndexed(alloc, null, ext, &.{ 0, 1, 0, 0 }, null, &index);
+    const result = try updNodeExIndexed(alloc, ext, &.{ 0, 1, 0, 0 }, null, &index);
     try std.testing.expectEqualSlices(u8, ext, result);
 }
 
@@ -1967,7 +2004,7 @@ test "updNodeExIndexed: deleting a key collapses branch to leaf" {
     const t = try buildTestBranchTrie(alloc);
     var index = try buildNodeIndex(alloc, t.pool);
     defer index.deinit();
-    const result = try updNodeExIndexed(alloc, null, t.branch, &.{1}, null, &index);
+    const result = try updNodeExIndexed(alloc, t.branch, &.{1}, null, &index);
     const expected = try updMakeLeaf(alloc, &.{2}, "b");
     try std.testing.expectEqualSlices(u8, expected, result);
 }
@@ -2021,7 +2058,7 @@ test "updNodeExIndexed: deleting collapses branch and merges extension" {
     const t = try buildTestExtBranchTrie(alloc);
     var index = try buildNodeIndex(alloc, t.pool);
     defer index.deinit();
-    const result = try updNodeExIndexed(alloc, null, t.root, &.{ 0, 1 }, null, &index);
+    const result = try updNodeExIndexed(alloc, t.root, &.{ 0, 1 }, null, &index);
     const expected = try updMakeLeaf(alloc, &.{ 0, 2 }, "b");
     try std.testing.expectEqualSlices(u8, expected, result);
 }
@@ -2060,9 +2097,35 @@ fn updRlpList(alloc: std.mem.Allocator, items: []const []const u8) ![]u8 {
     return out;
 }
 
-// Regression for #179: a NodeIndex shared across consecutive blocks must not be
-// left pointing into the scratch allocator of an earlier block's root update.
-test "batchUpdateIndexed: shared NodeIndex stays valid after scratch is freed" {
+test "NodeIndex.put: borrowed keeps the caller's slice, retaining copies it, neither replaces" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const witness: []const u8 = "witness-node";
+    const scratch: []const u8 = "scratch-copy";
+    const h = keccak256(witness);
+
+    var borrowed = NodeIndex.init(alloc);
+    defer borrowed.deinit();
+    try borrowed.put(h, scratch);
+    try std.testing.expectEqual(scratch.ptr, borrowed.get(h).?.ptr);
+    try borrowed.put(h, witness);
+    try std.testing.expectEqual(scratch.ptr, borrowed.get(h).?.ptr);
+
+    var retaining = NodeIndex.initRetaining(alloc, alloc);
+    defer retaining.deinit();
+    try retaining.put(h, scratch);
+    try std.testing.expect(retaining.get(h).?.ptr != scratch.ptr);
+    try std.testing.expectEqualSlices(u8, scratch, retaining.get(h).?);
+    const kept = retaining.get(h).?.ptr;
+    try retaining.put(h, witness);
+    try std.testing.expectEqual(kept, retaining.get(h).?.ptr);
+}
+
+// Regression for #179: an index shared across consecutive blocks must not be left
+// pointing into the scratch allocator of an earlier block's root update.
+test "batchUpdateIndexed: retaining NodeIndex stays valid after scratch is freed" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -2099,19 +2162,19 @@ test "batchUpdateIndexed: shared NodeIndex stays valid after scratch is freed" {
     const leaf_b2 = try leafAt(alloc, key_b, "vb2");
     const root1 = try branchOf(alloc, &.{ .{ 2, leaf_b2 }, .{ 3, leaf_c } });
 
-    var index = try buildNodeIndex(alloc, &.{ root0, leaf_a, leaf_b1, leaf_c, root1 });
+    var index = try buildNodeIndexRetaining(alloc, alloc, &.{ root0, leaf_a, leaf_b1, leaf_c, root1 });
     defer index.deinit();
 
     var scratch_buf: [16 * 1024]u8 = undefined;
     var scratch_fba = std.heap.FixedBufferAllocator.init(&scratch_buf);
     const block1 = [_]BatchChange{ .{ .key = key_a, .value = null }, .{ .key = key_b, .value = "vb2" } };
-    const got1 = try batchUpdateIndexed(scratch_fba.allocator(), alloc, keccak256(root0), &block1, &index);
+    const got1 = try batchUpdateIndexed(scratch_fba.allocator(), keccak256(root0), &block1, &index);
     try std.testing.expectEqual(keccak256(root1), got1);
     // Free block 1's scratch.
     @memset(&scratch_buf, 0xAA);
 
     const block2 = [_]BatchChange{.{ .key = key_b, .value = "vb3" }};
-    const got2 = try batchUpdateIndexed(alloc, alloc, got1, &block2, &index);
+    const got2 = try batchUpdateIndexed(alloc, got1, &block2, &index);
 
     var kv = [_]builder.KV{ .{ .key = &key_b, .value = "vb3" }, .{ .key = &key_c, .value = "vc" } };
     try std.testing.expectEqual(try builder.trieRoot(alloc, &kv), got2);
